@@ -1,0 +1,34 @@
+
+> tutor-button@1.0.0 dev
+> node server.js
+
+◇ injected env (16) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+
+🚀 Server running on http://localhost:5000
+🖥️  Frontend served from: C:\Users\raksh\OneDrive\Desktop\tutor-button\frontend\dist
+📋 Routes ready:
+   POST /auth/send-otp
+   POST /auth/verify-otp
+   POST /auth/register
+   POST /auth/login
+   POST /auth/login/verify
+   POST /auth/logout
+   GET  /auth/me
+   POST /student/profile
+   GET  /student/profile
+   PUT  /student/profile
+   POST /teacher/profile
+   GET  /teacher/profile
+   PUT  /teacher/profile
+   GET  /teacher/students
+   GET  /teacher/coins
+   POST /teacher/unlock/:studentId
+   GET  /teacher/unlocked
+   POST /payment/create-order
+   POST /payment/verify
+   GET  /health
+
+✅ Redis connected
+✅ Email transporter ready
+✅ User logged out: admin@tutormarket.in
+✅ Redis connected

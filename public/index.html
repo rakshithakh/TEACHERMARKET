@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>OTP Test — Email & Phone</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f4f5f7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .wrapper {
+      width: 100%;
+      max-width: 560px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #111;
+      text-align: center;
+    }
+    h1 span { color: #4f6ef7; }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    .email-dot { background: #4f6ef7; }
+    .phone-dot { background: #22c55e; }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #111;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #4f6ef7; }
+
+    button {
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary { background: #4f6ef7; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #3a5ae0; }
+
+    .btn-green { background: #22c55e; color: #fff; }
+    .btn-green:hover:not(:disabled) { background: #16a34a; }
+
+    .btn-verify { background: #111; color: #fff; }
+    .btn-verify:hover:not(:disabled) { background: #333; }
+
+    .result {
+      margin-top: 10px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      display: none;
+    }
+    .result.show { display: block; }
+    .result.success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .result.error   { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .result.info    { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+
+    .divider {
+      height: 1px; background: #f0f0f0; margin: 14px 0;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #aaa;
+      margin-top: 4px;
+    }
+
+    .timer {
+      font-size: 12px;
+      color: #e07a00;
+      margin-top: 6px;
+      display: none;
+    }
+    .timer.show { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="wrapper">
+
+  <h1>OTP Test — <span>Email</span> & Phone</h1>
+
+  <!-- ── EMAIL OTP ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">
+      <div class="dot email-dot"></div>
+      Email OTP
+    </div>
+
+    <div class="input-row">
+      <input id="email-input" type="email" placeholder="Enter email address" />
+      <button class="btn-primary" id="email-send-btn" onclick="sendEmailOtp()">Send OTP</button>
+    </div>
+    <div class="timer" id="email-timer"></div>
+
+    <div class="divider"></div>
+
+    <div class="input-row">
+      <input id="email-otp-input" type="text" placeholder="Enter 6-digit OTP" maxlength="6" />
+      <button class="btn-verify" onclick="verifyEmailOtp()">Verify</button>
+    </div>
+
+    <div class="hint">OTP will arrive in your inbox. Check spam if not seen.</div>
+    <div class="result" id="email-result"></div>
+  </div>
+
+  <!-- ── PHONE OTP ──────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">
+      <div class="dot phone-dot"></div>
+      Phone OTP
+    </div>
+
+    <div class="input-row">
+      <input id="phone-input" type="tel" placeholder="Enter phone number (e.g. +91...)" />
+      <button class="btn-green" id="phone-send-btn" onclick="sendPhoneOtp()">Send OTP</button>
+    </div>
+    <div class="timer" id="phone-timer"></div>
+
+    <div class="divider"></div>
+
+    <div class="input-row">
+      <input id="phone-otp-input" type="text" placeholder="Enter 6-digit OTP" maxlength="6" />
+      <button class="btn-verify" onclick="verifyPhoneOtp()">Verify</button>
+    </div>
+
+    <div class="hint">📱 OTP will be sent to your mobile number via SMS.</div>
+    <div class="result" id="phone-result"></div>
+  </div>
+
+</div>
+
+<script>
+  const BASE = "http://localhost:5000";
+
+  function showResult(id, message, type) {
+    const el = document.getElementById(id);
+    el.textContent = message;
+    el.className = `result show ${type}`;
+  }
+
+  function startTimer(timerId, btnId, seconds) {
+    const timerEl = document.getElementById(timerId);
+    const btnEl   = document.getElementById(btnId);
+    btnEl.disabled = true;
+    timerEl.classList.add("show");
+
+    let remaining = seconds;
+    timerEl.textContent = `Resend available in ${remaining}s`;
+
+    const interval = setInterval(() => {
+      remaining--;
+      timerEl.textContent = `Resend available in ${remaining}s`;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        btnEl.disabled = false;
+        timerEl.classList.remove("show");
+      }
+    }, 1000);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  EMAIL
+  // ══════════════════════════════════════════════════════════════════
+  async function sendEmailOtp() {
+    const email = document.getElementById("email-input").value.trim();
+
+    if (!email) {
+      showResult("email-result", "Please enter an email address.", "error");
+      return;
+    }
+
+    showResult("email-result", "Sending OTP...", "info");
+
+    try {
+      const res  = await fetch(`${BASE}/auth/send-email-otp`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ email }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showResult("email-result", data.error || "Failed to send OTP.", "error");
+        return;
+      }
+
+      showResult("email-result", data.message, "success");
+      startTimer("email-timer", "email-send-btn", 60);
+
+    } catch (err) {
+      showResult("email-result", "Cannot reach server. Is it running on port 5000?", "error");
+    }
+  }
+
+  async function verifyEmailOtp() {
+    const email = document.getElementById("email-input").value.trim();
+    const otp   = document.getElementById("email-otp-input").value.trim();
+
+    if (!email || !otp) {
+      showResult("email-result", "Enter both email and OTP.", "error");
+      return;
+    }
+
+    showResult("email-result", "Verifying...", "info");
+
+    try {
+      const res  = await fetch(`${BASE}/auth/verify-email-otp`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ email, otp }),
+      });
+      const data = await res.json();
+
+      showResult("email-result", data.message || data.error, res.ok ? "success" : "error");
+
+    } catch (err) {
+      showResult("email-result", "Cannot reach server.", "error");
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  PHONE — FIXED: only ONE fetch call now
+  // ══════════════════════════════════════════════════════════════════
+  async function sendPhoneOtp() {
+    const phone = document.getElementById("phone-input").value.trim();
+
+    if (!phone) {
+      showResult("phone-result", "Please enter a phone number.", "error");
+      return;
+    }
+
+    showResult("phone-result", "Sending OTP...", "info");
+
+    try {
+      const res  = await fetch(`${BASE}/auth/send-phone-otp`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ phone }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showResult("phone-result", data.error || "Failed to send OTP.", "error");
+        return;
+      }
+
+      showResult("phone-result", data.message, "success");
+      startTimer("phone-timer", "phone-send-btn", 60);
+
+    } catch (err) {
+      showResult("phone-result", "Cannot reach server. Is it running on port 5000?", "error");
+    }
+  }
+
+  async function verifyPhoneOtp() {
+    const phone = document.getElementById("phone-input").value.trim();
+    const otp   = document.getElementById("phone-otp-input").value.trim();
+
+    if (!phone || !otp) {
+      showResult("phone-result", "Enter both phone and OTP.", "error");
+      return;
+    }
+
+    showResult("phone-result", "Verifying...", "info");
+
+    try {
+      const res  = await fetch(`${BASE}/auth/verify-phone-otp`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ phone, otp }),
+      });
+      const data = await res.json();
+
+      showResult("phone-result", data.message || data.error, res.ok ? "success" : "error");
+
+    } catch (err) {
+      showResult("phone-result", "Cannot reach server.", "error");
+    }
+  }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USERS ────────────────────────────────────────────────────────────────────
+model User {
+  id          Int      @id @default(autoincrement())
+  email       String   @unique @db.Citext
+  phone       String   @unique
+  role        Role     @default(STUDENT)
+  isVerified  Boolean  @default(false)
+  isSuspended Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Student?
+  teacher     Teacher?
+  leads       Lead[]
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+// ─── STUDENT PROFILE ──────────────────────────────────────────────────────────
+model Student {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  email         String   @default("")
+  name          String   @default("")
+  class         String   @default("")
+  board         String   @default("")
+  subjects      String   @default("")
+  address       String   @default("")
+  area          String   @default("")
+  city          String   @default("")
+  pincode       String   @default("")
+  contactNumber String   @default("")
+  timing        String   @default("")
+  guardianName  String   @default("")
+  guardianPhone String   @default("")
+  notes         String   @default("")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  unlocks       Unlock[]
+}
+
+// ─── TEACHER PROFILE ──────────────────────────────────────────────────────────
+model Teacher {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  email         String   @default("")
+  name          String   @default("")
+  qualification String   @default("")
+  experience    Int      @default(0)
+  subjects      String   @default("")
+  location      String   @default("")
+  city          String   @default("")
+  pincode       String   @default("")
+  monthlyFee    Int      @default(0)
+
+  coinBalance   Int      @default(0)
+  freeViews     Int      @default(2)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments      Payment[]
+  unlocks       Unlock[]
+  leadApplications LeadApplication[]
+}
+
+// ─── PAYMENTS ─────────────────────────────────────────────────────────────────
+model Payment {
+  id          Int           @id @default(autoincrement())
+  teacherId   Int
+  teacher     Teacher       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  amount      Float
+  coinsAdded  Int
+  packageName String        @default("")   // ← NEW: e.g. "Starter Pack"
+  status      PaymentStatus @default(PENDING)
+  razorpayId  String?
+
+  createdAt   DateTime      @default(now())
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+// ─── UNLOCKS ──────────────────────────────────────────────────────────────────
+model Unlock {
+  id         Int      @id @default(autoincrement())
+  teacherId  Int
+  teacher    Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  studentId  Int
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  coinsSpent Int
+  createdAt  DateTime @default(now())
+
+  @@unique([teacherId, studentId])
+}
+
+// ─── COIN PACKAGES ────────────────────────────────────────────────────────────
+model CoinPackage {
+  id       Int      @id @default(autoincrement())
+  key      String   @unique @default("")  // ← NEW: e.g. "starter", "popular", "pro"
+  name     String
+  coins    Int
+  price    Float
+  isActive Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model Lead {
+  id              Int      @id @default(autoincrement())
+  studentId       Int
+  student         User     @relation(fields: [studentId], references: [id])
+  
+  name            String
+  email           String
+  phone           String
+  country         String
+  city            String
+  subject         String
+  requirementType String
+  description     String
+  
+  // File stored as Base64
+  fileName        String?
+  fileData        String?  // Base64 encoded file
+  fileType        String?  // image/pdf/doc etc
+  
+  status          LeadStatus @default(PENDING)
+  applyCount      Int        @default(0)
+  maxUnlocks      Int?
+  isPrivate       Boolean    @default(false)
+  
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  
+  applications    LeadApplication[]
+}
+
+enum LeadStatus {
+  PENDING
+  APPROVED
+  PUBLISHED
+  HIDDEN
+  CLOSED
+}
+
+model LeadApplication {
+  id        Int      @id @default(autoincrement())
+  leadId    Int
+  lead      Lead     @relation(fields: [leadId], references: [id])
+  teacherId Int
+  teacher   Teacher  @relation(fields: [teacherId], references: [id])
+  coinsSpent Int
+  createdAt DateTime @default(now())
+
+  @@unique([leadId, teacherId])
+}
+
+model FAQ {
+  id        Int      @id @default(autoincrement())
+  question  String
+  answer    String
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
