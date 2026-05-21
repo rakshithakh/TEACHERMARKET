@@ -12,14 +12,32 @@ const fs         = require("fs");
 const path       = require("path");
 const { PrismaClient } = require("@prisma/client");
 
+// ─── Crash Handlers (must be first) ──────────────────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+
 const app    = express();
 const prisma = new PrismaClient();
 
-// ─── Razorpay ─────────────────────────────────────────────────────────────────
-const razorpay = new Razorpay({
-  key_id:     process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+// ─── Razorpay (lazy init — safe if keys missing at boot) ─────────────────────
+let _razorpay = null;
+const getRazorpay = () => {
+  if (_razorpay) return _razorpay;
+  const keyId     = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret) {
+    throw new Error("Razorpay keys (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) are not configured.");
+  }
+  _razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+  return _razorpay;
+};
 
 const COINS_PER_RUPEE = parseInt(process.env.COINS_PER_RUPEE) || 1;
 const COINS_TO_UNLOCK = parseInt(process.env.COINS_TO_UNLOCK) || 50;
@@ -36,7 +54,7 @@ app.use(cors({
 }));
 
 // ─── Serve frontend ───────────────────────────────────────────────────────────
-const clientDistPath = path.join(__dirname, "frontend", "dist");
+const clientDistPath  = path.join(__dirname, "frontend", "dist");
 const legacyPublicPath = path.join(__dirname, "public");
 const frontendPath = fs.existsSync(path.join(clientDistPath, "index.html"))
   ? clientDistPath
@@ -79,7 +97,7 @@ const createMemoryRedis = () => {
     },
     async incr(key) {
       const entry = read(key);
-      const next = Number(entry?.value || 0) + 1;
+      const next  = Number(entry?.value || 0) + 1;
       store.set(key, { value: String(next), expiresAt: entry?.expiresAt || null });
       return next;
     },
@@ -95,7 +113,7 @@ const createMemoryRedis = () => {
 
 const createRedis = () => {
   const fallback = createMemoryRedis();
-  const redisUrl = String(process.env.REDIS_URL || "").trim();
+  const redisUrl  = String(process.env.REDIS_URL || "").trim();
 
   if (!redisUrl) {
     console.warn("Redis URL missing. Using in-memory cache fallback.");
@@ -107,7 +125,7 @@ const createRedis = () => {
     error?.message || error?.code || error?.name || "connection failed";
 
   const client = new Redis(redisUrl, {
-    connectTimeout: 5000,
+    connectTimeout:     5000,
     enableOfflineQueue: false,
     maxRetriesPerRequest: 1,
     retryStrategy: (times) => {
@@ -120,8 +138,8 @@ const createRedis = () => {
   });
 
   client.on("connect", () => console.log("Redis connected"));
-  client.on("ready", () => console.log("Redis ready"));
-  client.on("error", (e) => {
+  client.on("ready",   () => console.log("Redis ready"));
+  client.on("error",   (e) => {
     if (redisErrorLogged) return;
     redisErrorLogged = true;
     console.error("Redis error:", describeRedisError(e));
@@ -129,7 +147,6 @@ const createRedis = () => {
 
   const run = async (command, args) => {
     if (client.status !== "ready") return fallback[command](...args);
-
     try {
       return await client[command](...args);
     } catch (error) {
@@ -142,10 +159,10 @@ const createRedis = () => {
     get status() {
       return client.status === "ready" ? "ready" : `memory-fallback (${client.status})`;
     },
-    get: (...args) => run("get", args),
-    set: (...args) => run("set", args),
-    del: (...args) => run("del", args),
-    incr: (...args) => run("incr", args),
+    get:    (...args) => run("get",    args),
+    set:    (...args) => run("set",    args),
+    del:    (...args) => run("del",    args),
+    incr:   (...args) => run("incr",   args),
     expire: (...args) => run("expire", args),
   };
 };
@@ -156,21 +173,22 @@ const redis = createRedis();
 const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
-const OTP_TTL      = parseInt(process.env.OTP_TTL)         || 300;
-const MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS) || 3;
+const OTP_TTL                = parseInt(process.env.OTP_TTL)              || 300;
+const MAX_ATTEMPTS           = parseInt(process.env.OTP_MAX_ATTEMPTS)     || 3;
 const EMAIL_VERIFICATION_TTL = parseInt(process.env.EMAIL_VERIFICATION_TTL) || 24 * 60 * 60;
 
 // ─── Parse subjects helper ────────────────────────────────────────────────────
 const parseSubjects = (subjects) => {
   if (Array.isArray(subjects)) return subjects;
-  if (typeof subjects === 'string') {
-    return subjects.split(',').map(s => s.trim()).filter(Boolean);
+  if (typeof subjects === "string") {
+    return subjects.split(",").map((s) => s.trim()).filter(Boolean);
   }
   return [];
 };
 
 const serializeSubjects = (subjects) => parseSubjects(subjects).join(",");
-const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+const normalizeEmail    = (email) => String(email || "").trim().toLowerCase();
+
 const ALLOWED_LEAD_FILE_EXTENSIONS = new Set(["pdf", "doc", "docx", "png", "jpg", "jpeg", "webp"]);
 const ALLOWED_LEAD_FILE_TYPES = new Set([
   "application/pdf",
@@ -184,7 +202,8 @@ const ALLOWED_LEAD_FILE_TYPES = new Set([
 const isAllowedLeadFile = (fileName, fileType) => {
   if (!fileName && !fileType) return true;
   const ext = String(fileName || "").split(".").pop()?.toLowerCase();
-  return ALLOWED_LEAD_FILE_EXTENSIONS.has(ext) || ALLOWED_LEAD_FILE_TYPES.has(String(fileType || "").toLowerCase());
+  return ALLOWED_LEAD_FILE_EXTENSIONS.has(ext) ||
+         ALLOWED_LEAD_FILE_TYPES.has(String(fileType || "").toLowerCase());
 };
 
 const cleanLead = (lead) => ({
@@ -212,7 +231,9 @@ const cleanLead = (lead) => ({
 const cleanLeadForTeacher = (lead, isUnlocked = false, extra = {}) => ({
   id:              lead.id,
   studentUserId:   lead.studentId,
-  studentName:     isUnlocked ? lead.name : `${String(lead.name || "Student").split(" ")[0]} ${String(lead.name || "").split(" ")[1]?.[0] || ""}.`.trim(),
+  studentName:     isUnlocked
+    ? lead.name
+    : `${String(lead.name || "Student").split(" ")[0]} ${String(lead.name || "").split(" ")[1]?.[0] || ""}.`.trim(),
   studentEmail:    isUnlocked ? lead.email : "",
   studentMobile:   isUnlocked ? lead.phone : "",
   country:         lead.country,
@@ -275,6 +296,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Non-blocking verify — won't prevent server from starting
 transporter.verify((error) => {
   if (error) {
     console.error("❌ Email transporter error:", error.message);
@@ -286,9 +308,9 @@ transporter.verify((error) => {
 // ─── Send OTP Email helper ────────────────────────────────────────────────────
 const sendOtpEmail = async (email, otp, subject) => {
   await transporter.sendMail({
-    from:    `"Home Tutor Platform" <${process.env.EMAIL_USER}>`,
-    to:      email,
-    subject: subject,
+    from: `"Home Tutor Platform" <${process.env.EMAIL_USER}>`,
+    to:   email,
+    subject,
     html: `
       <div style="font-family:sans-serif;max-width:420px;margin:auto;padding:32px;border:1px solid #e5e7eb;border-radius:12px;">
         <h2 style="margin:0 0 8px;color:#111">${subject}</h2>
@@ -301,11 +323,11 @@ const sendOtpEmail = async (email, otp, subject) => {
 };
 
 const DEFAULT_FAQS = [
-  { question: "How does TeacherMarket work?", answer: "Students post their requirements for free. Admin reviews each inquiry, then published leads become available for teachers to unlock with coins.", order: 1 },
-  { question: "Is it free for students?", answer: "Yes. Students can post education-related requirements for free.", order: 2 },
-  { question: "How do teachers contact students?", answer: "Teachers can browse published leads and unlock contact details using coins. Student contact details are hidden before unlock.", order: 3 },
-  { question: "Can students attach assignment or project files?", answer: "Yes. Students can attach documents, images, or PDFs while posting assignment, project, or software-learning requirements.", order: 4 },
-  { question: "Are phone numbers shown publicly?", answer: "No. TeacherMarket does not show personal mobile numbers or WhatsApp numbers publicly.", order: 5 },
+  { question: "How does TeacherMarket work?",                         answer: "Students post their requirements for free. Admin reviews each inquiry, then published leads become available for teachers to unlock with coins.", order: 1 },
+  { question: "Is it free for students?",                             answer: "Yes. Students can post education-related requirements for free.", order: 2 },
+  { question: "How do teachers contact students?",                    answer: "Teachers can browse published leads and unlock contact details using coins. Student contact details are hidden before unlock.", order: 3 },
+  { question: "Can students attach assignment or project files?",     answer: "Yes. Students can attach documents, images, or PDFs while posting assignment, project, or software-learning requirements.", order: 4 },
+  { question: "Are phone numbers shown publicly?",                    answer: "No. TeacherMarket does not show personal mobile numbers or WhatsApp numbers publicly.", order: 5 },
 ];
 
 const ensureDefaultFaqs = async () => {
@@ -393,7 +415,7 @@ app.post("/auth/send-otp", async (req, res) => {
     }
 
     const otp       = generateOTP();
-    const hashedOtp = await bcrypt.hash(otp, 8); // Reduced from 10 to 8 for faster hashing
+    const hashedOtp = await bcrypt.hash(otp, 8);
     console.log(`📧 OTP for ${email}: ${otp}`);
 
     await redis.set(
@@ -403,7 +425,7 @@ app.post("/auth/send-otp", async (req, res) => {
     );
 
     // Send email in background (non-blocking)
-    sendOtpEmail(email, otp, "Your OTP Code — Home Tutor").catch(err => {
+    sendOtpEmail(email, otp, "Your OTP Code — Home Tutor").catch((err) => {
       console.error("Email sending failed:", err.message);
     });
 
@@ -419,7 +441,7 @@ app.post("/auth/send-otp", async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/auth/verify-otp", async (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(req.body.email);
     const { otp } = req.body;
 
     if (!email || !otp) return res.status(400).json({ error: "Email and OTP are required" });
@@ -445,37 +467,33 @@ app.post("/auth/verify-otp", async (req, res) => {
     await redis.del(`otp:${email}`);
 
     if (!parsed.isNewUser) {
-      // Existing user — log them in directly
-      const user  = await prisma.user.findUnique({
+      const user = await prisma.user.findUnique({
         where:   { email },
-        include: { student: true, teacher: true }
+        include: { student: true, teacher: true },
       });
       const token = jwt.sign(
         { userId: user.id, role: user.role, email: user.email },
         process.env.JWT_SECRET
       );
-
       console.log(`✅ Existing user logged in via OTP: ${email}`);
-
       return res.json({
         message:   "Logged in successfully ✅",
         isNewUser: false,
         token,
         user: {
-          id:      user.id,
-          email:   user.email,
-          phone:   user.phone,
-          role:    user.role,
+          id:         user.id,
+          email:      user.email,
+          phone:      user.phone,
+          role:       user.role,
           isVerified: user.isVerified,
-          createdAt: user.createdAt,
-          teacher: user.teacher || null,
-          student: user.student || null,
-          profile: user.student || user.teacher || null,
-        }
+          createdAt:  user.createdAt,
+          teacher:    user.teacher || null,
+          student:    user.student || null,
+          profile:    user.student || user.teacher || null,
+        },
       });
     }
 
-    // New user — mark email as verified
     await redis.set(`verified:${email}`, "true", "EX", EMAIL_VERIFICATION_TTL);
     const verificationToken = jwt.sign(
       { email, purpose: "email_verification" },
@@ -484,10 +502,10 @@ app.post("/auth/verify-otp", async (req, res) => {
     );
 
     res.json({
-      message:       "Email verified successfully ✅",
-      isNewUser:     true,
-      verifiedEmail: email,
-      verificationToken
+      message:           "Email verified successfully ✅",
+      isNewUser:         true,
+      verifiedEmail:     email,
+      verificationToken,
     });
   } catch (err) {
     console.error("Verify OTP error:", err.message);
@@ -501,8 +519,8 @@ app.post("/auth/verify-otp", async (req, res) => {
 app.post("/auth/register", async (req, res) => {
   try {
     const { phone, googleId, verificationToken } = req.body;
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const role = String(req.body.role || "").toUpperCase();
+    const email = normalizeEmail(req.body.email);
+    const role  = String(req.body.role || "").toUpperCase();
 
     if (!email || !role) {
       return res.status(400).json({ error: "Email and role are required" });
@@ -551,12 +569,10 @@ app.post("/auth/register", async (req, res) => {
       return res.status(409).json({ error: "User with this phone already exists." });
     }
 
-    // Create user
     const user = await prisma.user.create({
-      data: { email, phone: fullPhone, role, isVerified: true }
+      data: { email, phone: fullPhone, role, isVerified: true },
     });
 
-    // Auto create empty profile so teacher/student can fill it later
     if (role === "TEACHER") {
       await prisma.teacher.create({
         data: {
@@ -571,7 +587,7 @@ app.post("/auth/register", async (req, res) => {
           pincode:       "",
           coinBalance:   STARTING_COINS,
           freeViews:     FREE_VIEWS,
-        }
+        },
       });
     }
 
@@ -587,7 +603,7 @@ app.post("/auth/register", async (req, res) => {
           city:          "",
           pincode:       "",
           contactNumber: fullPhone,
-        }
+        },
       });
     }
 
@@ -600,26 +616,25 @@ app.post("/auth/register", async (req, res) => {
 
     console.log(`✅ New ${role} registered: ${email}`);
 
-    // Fetch full user with profile
     const fullUser = await prisma.user.findUnique({
       where:   { id: user.id },
-      include: { student: true, teacher: true }
+      include: { student: true, teacher: true },
     });
 
     res.status(201).json({
       message: "Registration successful ✅",
       token,
       user: {
-        id:      fullUser.id,
-        email:   fullUser.email,
-        phone:   fullUser.phone,
-        role:    fullUser.role,
+        id:         fullUser.id,
+        email:      fullUser.email,
+        phone:      fullUser.phone,
+        role:       fullUser.role,
         isVerified: fullUser.isVerified,
-        createdAt: fullUser.createdAt,
-        teacher: fullUser.teacher || null,
-        student: fullUser.student || null,
-        profile: fullUser.student || fullUser.teacher || null,
-      }
+        createdAt:  fullUser.createdAt,
+        teacher:    fullUser.teacher || null,
+        student:    fullUser.student || null,
+        profile:    fullUser.student || fullUser.teacher || null,
+      },
     });
   } catch (err) {
     console.error("Register error:", err.message);
@@ -635,7 +650,7 @@ app.post("/auth/register", async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/auth/login", async (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(req.body.email);
 
     if (!email) return res.status(400).json({ error: "Email is required" });
 
@@ -674,7 +689,7 @@ app.post("/auth/login", async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/auth/login/verify", async (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(req.body.email);
     const { otp } = req.body;
 
     if (!email || !otp) return res.status(400).json({ error: "Email and OTP are required" });
@@ -701,7 +716,7 @@ app.post("/auth/login/verify", async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where:   { email },
-      include: { student: true, teacher: true }
+      include: { student: true, teacher: true },
     });
 
     const token = jwt.sign(
@@ -715,16 +730,16 @@ app.post("/auth/login/verify", async (req, res) => {
       message: "Login successful ✅",
       token,
       user: {
-        id:      user.id,
-        email:   user.email,
-        phone:   user.phone,
-        role:    user.role,
+        id:         user.id,
+        email:      user.email,
+        phone:      user.phone,
+        role:       user.role,
         isVerified: user.isVerified,
-        createdAt: user.createdAt,
-        teacher: user.teacher || null,
-        student: user.student || null,
-        profile: user.student || user.teacher || null,
-      }
+        createdAt:  user.createdAt,
+        teacher:    user.teacher || null,
+        student:    user.student || null,
+        profile:    user.student || user.teacher || null,
+      },
     });
   } catch (err) {
     console.error("Login verify error:", err.message);
@@ -733,15 +748,15 @@ app.post("/auth/login/verify", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  AUTH — LOGOUT
+//  AUTH — ADMIN LOGIN
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/auth/admin-login", async (req, res) => {
   try {
-    const email = (process.env.ADMIN_EMAIL || "admin@tutormatch.in").trim().toLowerCase();
-    const submittedEmail = normalizeEmail(req.body.email);
-    const password = String(req.body.password || "");
+    const email            = (process.env.ADMIN_EMAIL || "admin@tutormatch.in").trim().toLowerCase();
+    const submittedEmail   = normalizeEmail(req.body.email);
+    const password         = String(req.body.password || "");
     const expectedPassword = process.env.ADMIN_PASSWORD || "admin123";
-    const configuredPhone = process.env.ADMIN_PHONE || "+910000000000";
+    const configuredPhone  = process.env.ADMIN_PHONE    || "+910000000000";
 
     if (!submittedEmail || !password) {
       return res.status(400).json({ error: "Admin email and password are required" });
@@ -760,9 +775,7 @@ app.post("/auth/admin-login", async (req, res) => {
       });
     } else {
       const phoneOwner = await prisma.user.findUnique({ where: { phone: configuredPhone } });
-      const adminPhone = phoneOwner
-        ? `+91${Date.now()}`
-        : configuredPhone;
+      const adminPhone = phoneOwner ? `+91${Date.now()}` : configuredPhone;
 
       user = await prisma.user.create({
         data: { email, phone: adminPhone, role: "ADMIN", isVerified: true, isSuspended: false },
@@ -778,14 +791,14 @@ app.post("/auth/admin-login", async (req, res) => {
       message: "Admin login successful",
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
+        id:        user.id,
+        email:     user.email,
+        phone:     user.phone,
+        role:      user.role,
         createdAt: user.createdAt,
-        teacher: null,
-        student: null,
-        profile: null,
+        teacher:   null,
+        student:   null,
+        profile:   null,
       },
     });
   } catch (err) {
@@ -794,6 +807,9 @@ app.post("/auth/admin-login", async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  AUTH — LOGOUT
+// ══════════════════════════════════════════════════════════════════════════════
 app.post("/auth/logout", authenticateToken, async (req, res) => {
   try {
     await redis.set(`blacklist:${req.token}`, "true");
@@ -812,22 +828,22 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where:   { id: req.user.userId },
-      include: { student: true, teacher: true }
+      include: { student: true, teacher: true },
     });
 
     if (!user) return res.status(404).json({ error: "User not found" });
 
     res.json({
-      id:      user.id,
-      email:   user.email,
-      phone:   user.phone,
-      role:    user.role,
-      isVerified: user.isVerified,
+      id:          user.id,
+      email:       user.email,
+      phone:       user.phone,
+      role:        user.role,
+      isVerified:  user.isVerified,
       isSuspended: user.isSuspended,
-      createdAt: user.createdAt,
-      teacher: user.teacher || null,
-      student: user.student || null,
-      profile: user.student || user.teacher || null,
+      createdAt:   user.createdAt,
+      teacher:     user.teacher || null,
+      student:     user.student || null,
+      profile:     user.student || user.teacher || null,
     });
   } catch (err) {
     console.error("Get me error:", err.message);
@@ -836,38 +852,25 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  STUDENT PROFILE — CREATE
+//  STUDENT PROFILE — CREATE / UPDATE (POST)
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/student/profile", authenticateToken, requireRole("STUDENT"), async (req, res) => {
   try {
     const userEmail = normalizeEmail(req.user.email);
     const {
-      name,
-      class: studentClass,
-      board,
-      subjects,
-      address,
-      area,
-      city,
-      pincode,
-      contactNumber,
-      timing,
-      guardianName,
-      guardianPhone,
-      notes,
+      name, class: studentClass, board, subjects,
+      address, area, city, pincode, contactNumber,
+      timing, guardianName, guardianPhone, notes,
     } = req.body;
     const subjectText = serializeSubjects(subjects);
 
-    const existing = await prisma.student.findUnique({
-      where: { userId: req.user.userId }
-    });
+    const existing = await prisma.student.findUnique({ where: { userId: req.user.userId } });
 
     if (existing) {
-      // Update instead of error
       const student = await prisma.student.update({
         where: { userId: req.user.userId },
         data: {
-          email:         userEmail,
+          email: userEmail,
           ...(name          && { name }),
           ...(studentClass  && { class: studentClass }),
           ...(board         && { board }),
@@ -881,64 +884,23 @@ app.post("/student/profile", authenticateToken, requireRole("STUDENT"), async (r
           ...(guardianName  && { guardianName }),
           ...(guardianPhone && { guardianPhone }),
           ...(notes         && { notes }),
-        }
+        },
       });
-      return res.json({
-        message:       "Student profile updated ✅",
-        email:         student.email,
-        name:          student.name,
-        class:         student.class,
-        board:         student.board,
-        subjects:      student.subjects,
-        address:       student.address,
-        area:          student.area,
-        city:          student.city,
-        pincode:       student.pincode,
-        contactNumber: student.contactNumber,
-        timing:        student.timing,
-        guardianName:  student.guardianName,
-        guardianPhone: student.guardianPhone,
-        notes:         student.notes,
-      });
+      return res.json({ message: "Student profile updated ✅", ...student });
     }
 
     const student = await prisma.student.create({
       data: {
-        userId:        req.user.userId,
-        email:         userEmail,
-        name:          name || "",
-        class:         studentClass || "",
-        board:         board || "",
-        subjects:      subjectText,
-        address:       address || "",
-        area:          area || "",
-        city:          city || "",
-        pincode:       pincode || "",
-        contactNumber: contactNumber || "",
-        timing:        timing || "",
-        guardianName:  guardianName || "",
-        guardianPhone: guardianPhone || "",
-        notes:         notes || "",
-      }
+        userId: req.user.userId, email: userEmail,
+        name: name || "", class: studentClass || "", board: board || "",
+        subjects: subjectText, address: address || "", area: area || "",
+        city: city || "", pincode: pincode || "", contactNumber: contactNumber || "",
+        timing: timing || "", guardianName: guardianName || "",
+        guardianPhone: guardianPhone || "", notes: notes || "",
+      },
     });
 
-    res.status(201).json({
-      message:       "Student profile created ✅",
-      email:         student.email,
-      name:          student.name,
-      class:         student.class,
-      board:         student.board,
-      subjects:      student.subjects,
-      address:       student.address,
-      area:          student.area,
-      city:          student.city,
-      pincode:       student.pincode,
-      contactNumber: student.contactNumber,
-      timing:        student.timing,
-      guardianName:  student.guardianName,
-      guardianPhone: student.guardianPhone,
-      notes:         student.notes,
-    });
+    res.status(201).json({ message: "Student profile created ✅", ...student });
   } catch (err) {
     console.error("Create student profile error:", err.message);
     res.status(500).json({ error: "Failed to create profile: " + err.message });
@@ -950,30 +912,9 @@ app.post("/student/profile", authenticateToken, requireRole("STUDENT"), async (r
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/student/profile", authenticateToken, requireRole("STUDENT"), async (req, res) => {
   try {
-    const student = await prisma.student.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!student) {
-      return res.status(404).json({ error: "Profile not found." });
-    }
-
-    res.json({
-      email:         student.email,
-      name:          student.name,
-      class:         student.class,
-      board:         student.board,
-      subjects:      student.subjects,
-      address:       student.address,
-      area:          student.area,
-      city:          student.city,
-      pincode:       student.pincode,
-      contactNumber: student.contactNumber,
-      timing:        student.timing,
-      guardianName:  student.guardianName,
-      guardianPhone: student.guardianPhone,
-      notes:         student.notes,
-    });
+    const student = await prisma.student.findUnique({ where: { userId: req.user.userId } });
+    if (!student) return res.status(404).json({ error: "Profile not found." });
+    res.json(student);
   } catch (err) {
     console.error("Get student profile error:", err.message);
     res.status(500).json({ error: "Server error" });
@@ -981,39 +922,26 @@ app.get("/student/profile", authenticateToken, requireRole("STUDENT"), async (re
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  STUDENT PROFILE — UPDATE
+//  STUDENT PROFILE — UPDATE (PUT)
 // ══════════════════════════════════════════════════════════════════════════════
 app.put("/student/profile", authenticateToken, requireRole("STUDENT"), async (req, res) => {
   try {
     const userEmail = normalizeEmail(req.user.email);
     const {
-      name,
-      class: studentClass,
-      board,
-      subjects,
-      address,
-      area,
-      city,
-      pincode,
-      contactNumber,
-      timing,
-      guardianName,
-      guardianPhone,
-      notes,
+      name, class: studentClass, board, subjects,
+      address, area, city, pincode, contactNumber,
+      timing, guardianName, guardianPhone, notes,
     } = req.body;
     const subjectText = serializeSubjects(subjects);
 
-    // Upsert — create if not exists, update if exists
-    const existing = await prisma.student.findUnique({
-      where: { userId: req.user.userId }
-    });
+    const existing = await prisma.student.findUnique({ where: { userId: req.user.userId } });
 
     let student;
     if (existing) {
       student = await prisma.student.update({
         where: { userId: req.user.userId },
         data: {
-          email:         userEmail,
+          email: userEmail,
           ...(name          !== undefined && { name }),
           ...(studentClass  !== undefined && { class: studentClass }),
           ...(board         !== undefined && { board }),
@@ -1027,46 +955,22 @@ app.put("/student/profile", authenticateToken, requireRole("STUDENT"), async (re
           ...(guardianName  !== undefined && { guardianName }),
           ...(guardianPhone !== undefined && { guardianPhone }),
           ...(notes         !== undefined && { notes }),
-        }
+        },
       });
     } else {
       student = await prisma.student.create({
         data: {
-          userId:        req.user.userId,
-          email:         userEmail,
-          name:          name || "",
-          class:         studentClass || "",
-          board:         board || "",
-          subjects:      subjectText,
-          address:       address || "",
-          area:          area || "",
-          city:          city || "",
-          pincode:       pincode || "",
-          contactNumber: contactNumber || "",
-          timing:        timing || "",
-          guardianName:  guardianName || "",
-          guardianPhone: guardianPhone || "",
-          notes:         notes || "",
-        }
+          userId: req.user.userId, email: userEmail,
+          name: name || "", class: studentClass || "", board: board || "",
+          subjects: subjectText, address: address || "", area: area || "",
+          city: city || "", pincode: pincode || "", contactNumber: contactNumber || "",
+          timing: timing || "", guardianName: guardianName || "",
+          guardianPhone: guardianPhone || "", notes: notes || "",
+        },
       });
     }
 
-    res.json({
-      message:       "Profile updated ✅",
-      name:          student.name,
-      class:         student.class,
-      board:         student.board,
-      subjects:      student.subjects,
-      address:       student.address,
-      area:          student.area,
-      city:          student.city,
-      pincode:       student.pincode,
-      contactNumber: student.contactNumber,
-      timing:        student.timing,
-      guardianName:  student.guardianName,
-      guardianPhone: student.guardianPhone,
-      notes:         student.notes,
-    });
+    res.json({ message: "Profile updated ✅", ...student });
   } catch (err) {
     console.error("Update student profile error:", err.message);
     res.status(500).json({ error: "Failed to update profile: " + err.message });
@@ -1074,31 +978,23 @@ app.put("/student/profile", authenticateToken, requireRole("STUDENT"), async (re
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  TEACHER PROFILE — CREATE
+//  STUDENT LEADS — CREATE
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/student/leads", optionalAuthenticateToken, async (req, res) => {
   try {
     const {
-      name,
-      email,
-      mobile,
-      country,
-      city,
-      subject,
-      requirementType,
-      description,
-      fileAttachment,
-      fileName,
-      fileType,
+      name, email, mobile, country, city,
+      subject, requirementType, description,
+      fileAttachment, fileName, fileType,
     } = req.body;
 
     if (req.user && req.user.role !== "STUDENT") {
       return res.status(403).json({ error: "Access denied. Only STUDENTS can do this." });
     }
 
-    const fallbackEmail = normalizeEmail(email || req.user?.email);
-    const cleanedMobile = String(mobile || "").replace(/^\+?91/, "").trim();
-    let fallbackPhone = cleanedMobile ? `+91${cleanedMobile}` : `+91${Date.now()}`;
+    const fallbackEmail  = normalizeEmail(email || req.user?.email);
+    const cleanedMobile  = String(mobile || "").replace(/^\+?91/, "").trim();
+    let   fallbackPhone  = cleanedMobile ? `+91${cleanedMobile}` : `+91${Date.now()}`;
 
     let studentUserId = req.user?.userId;
     if (!studentUserId) {
@@ -1123,7 +1019,7 @@ app.post("/student/leads", optionalAuthenticateToken, async (req, res) => {
       });
 
       if (!studentUser) {
-        const phoneOwner = await prisma.user.findUnique({ where: { phone: fallbackPhone } });
+        const phoneOwner     = await prisma.user.findUnique({ where: { phone: fallbackPhone } });
         const generatedEmail = fallbackEmail || `student-${Date.now()}@teachermarket.local`;
 
         if (phoneOwner && phoneOwner.role !== "STUDENT") {
@@ -1134,13 +1030,13 @@ app.post("/student/leads", optionalAuthenticateToken, async (req, res) => {
           data: {
             email: generatedEmail,
             phone: fallbackPhone,
-            role: "STUDENT",
+            role:  "STUDENT",
             isVerified: true,
             student: {
               create: {
-                email: generatedEmail,
-                name: String(name || generatedEmail.split("@")[0]).trim(),
-                city: String(city || "").trim(),
+                email:         generatedEmail,
+                name:          String(name || generatedEmail.split("@")[0]).trim(),
+                city:          String(city || "").trim(),
                 contactNumber: fallbackPhone,
               },
             },
@@ -1166,20 +1062,20 @@ app.post("/student/leads", optionalAuthenticateToken, async (req, res) => {
         email:           fallbackEmail,
         phone:           fallbackPhone,
         country:         String(country || "India").trim(),
-        city:            String(city || "").trim(),
+        city:            String(city    || "").trim(),
         subject:         String(subject || "").trim(),
         requirementType: String(requirementType).trim(),
         description:     String(description).trim(),
-        fileName:        fileName || null,
-        fileData:        fileAttachment || null,
-        fileType:        fileType || null,
+        fileName:        fileName        || null,
+        fileData:        fileAttachment  || null,
+        fileType:        fileType        || null,
         status:          "PENDING",
       },
     });
 
     res.status(201).json({
       message: "Your requirement has been submitted. Admin will review and publish it.",
-      lead: cleanLead(lead),
+      lead:    cleanLead(lead),
     });
   } catch (err) {
     console.error("Create student lead error:", err.message);
@@ -1187,6 +1083,9 @@ app.post("/student/leads", optionalAuthenticateToken, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  STUDENT LEADS — GET OWN
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/student/leads", optionalAuthenticateToken, async (req, res) => {
   try {
     if (req.user && req.user.role !== "STUDENT") {
@@ -1195,7 +1094,7 @@ app.get("/student/leads", optionalAuthenticateToken, async (req, res) => {
 
     let studentId = req.user?.userId;
     if (!studentId) {
-      const email = String(req.query.email || "").trim().toLowerCase();
+      const email       = normalizeEmail(req.query.email);
       const studentUser = email
         ? await prisma.user.findFirst({ where: { email, role: "STUDENT" } })
         : null;
@@ -1204,7 +1103,7 @@ app.get("/student/leads", optionalAuthenticateToken, async (req, res) => {
     }
 
     const leads = await prisma.lead.findMany({
-      where: { studentId },
+      where:   { studentId },
       orderBy: { createdAt: "desc" },
     });
 
@@ -1215,47 +1114,39 @@ app.get("/student/leads", optionalAuthenticateToken, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  TEACHER LEADS — GET ALL PUBLISHED
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/leads", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Please create your teacher profile first." });
-    }
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Please create your teacher profile first." });
 
     const { type = "ALL", subject = "", city = "" } = req.query;
-    const where = {
-      status: "PUBLISHED",
-      isPrivate: false,
-    };
+    const where = { status: "PUBLISHED", isPrivate: false };
 
     if (type !== "ALL") where.requirementType = String(type);
     if (subject) {
       where.OR = [
-        { subject: { contains: String(subject), mode: "insensitive" } },
+        { subject:     { contains: String(subject), mode: "insensitive" } },
         { description: { contains: String(subject), mode: "insensitive" } },
       ];
     }
     if (city) where.city = { contains: String(city), mode: "insensitive" };
 
     const applications = await prisma.leadApplication.findMany({
-      where: { teacherId: teacher.id },
+      where:  { teacherId: teacher.id },
       select: { leadId: true, coinsSpent: true, createdAt: true },
     });
-    const byLead = new Map(applications.map(a => [a.leadId, a]));
+    const byLead = new Map(applications.map((a) => [a.leadId, a]));
 
-    const leads = await prisma.lead.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-    });
+    const leads = await prisma.lead.findMany({ where, orderBy: { createdAt: "desc" } });
 
     res.json({
-      leads: leads.map(lead => cleanLeadForTeacher(lead, byLead.has(lead.id), byLead.get(lead.id) || {})),
-      total: leads.length,
-      coinBalance: teacher.coinBalance,
-      freeViews: teacher.freeViews,
+      leads:         leads.map((lead) => cleanLeadForTeacher(lead, byLead.has(lead.id), byLead.get(lead.id) || {})),
+      total:         leads.length,
+      coinBalance:   teacher.coinBalance,
+      freeViews:     teacher.freeViews,
       coinsToUnlock: COINS_TO_UNLOCK,
     });
   } catch (err) {
@@ -1264,36 +1155,33 @@ app.get("/teacher/leads", authenticateToken, requireRole("TEACHER"), async (req,
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  TEACHER LEADS — GET UNLOCKED
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/leads/unlocked", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
 
     const [applications, profileUnlocks] = await Promise.all([
       prisma.leadApplication.findMany({
-        where: { teacherId: teacher.id },
+        where:   { teacherId: teacher.id },
         include: { lead: true },
         orderBy: { createdAt: "desc" },
       }),
       prisma.unlock.findMany({
-        where: { teacherId: teacher.id },
+        where:   { teacherId: teacher.id },
         include: { student: { include: { user: true } } },
         orderBy: { createdAt: "desc" },
       }),
     ]);
 
-    const leadUnlocks = applications.map(a => cleanLeadForTeacher(a.lead, true, {
-      coinsSpent: a.coinsSpent,
-      unlockedAt: a.createdAt,
-    }));
+    const leadUnlocks = applications.map((a) =>
+      cleanLeadForTeacher(a.lead, true, { coinsSpent: a.coinsSpent, unlockedAt: a.createdAt })
+    );
 
-    const legacyProfileUnlocks = profileUnlocks.map(u => {
-      const student = u.student;
+    const legacyProfileUnlocks = profileUnlocks.map((u) => {
+      const student  = u.student;
       const subjects = parseSubjects(student.subjects);
       return {
         id:              `profile-${student.id}`,
@@ -1305,25 +1193,16 @@ app.get("/teacher/leads/unlocked", authenticateToken, requireRole("TEACHER"), as
         city:            student.city || "",
         subject:         subjects.join(", "),
         requirementType: "Student Profile",
-        description:     [
-          student.class ? `Class: ${student.class}` : "",
-          subjects.length ? `Subjects: ${subjects.join(", ")}` : "",
-          student.timing ? `Timing: ${student.timing}` : "",
-          student.notes ? `Notes: ${student.notes}` : "",
+        description: [
+          student.class   ? `Class: ${student.class}`           : "",
+          subjects.length ? `Subjects: ${subjects.join(", ")}`  : "",
+          student.timing  ? `Timing: ${student.timing}`         : "",
+          student.notes   ? `Notes: ${student.notes}`           : "",
         ].filter(Boolean).join(" | ") || "Unlocked student profile",
-        fileName:        null,
-        fileAttachment:  null,
-        fileType:        null,
-        status:          "PUBLISHED",
-        appliedCount:    0,
-        maxUnlocks:      null,
-        isPrivate:       false,
-        isUnlocked:      true,
-        coinsSpent:      u.coinsSpent,
-        isFree:          u.coinsSpent === 0,
-        unlockedAt:      u.createdAt,
-        createdAt:       student.createdAt,
-        updatedAt:       student.updatedAt,
+        fileName:    null, fileAttachment: null, fileType: null,
+        status:      "PUBLISHED", appliedCount: 0, maxUnlocks: null, isPrivate: false,
+        isUnlocked:  true, coinsSpent: u.coinsSpent, isFree: u.coinsSpent === 0,
+        unlockedAt:  u.createdAt, createdAt: student.createdAt, updatedAt: student.updatedAt,
       };
     });
 
@@ -1337,17 +1216,14 @@ app.get("/teacher/leads/unlocked", authenticateToken, requireRole("TEACHER"), as
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  TEACHER LEADS — UNLOCK
+// ══════════════════════════════════════════════════════════════════════════════
 app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const leadId = parseInt(req.params.leadId);
-
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
+    const leadId  = parseInt(req.params.leadId);
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
 
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead || lead.status !== "PUBLISHED" || lead.isPrivate) {
@@ -1355,16 +1231,16 @@ app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHE
     }
 
     const alreadyUnlocked = await prisma.leadApplication.findUnique({
-      where: { leadId_teacherId: { leadId, teacherId: teacher.id } }
+      where: { leadId_teacherId: { leadId, teacherId: teacher.id } },
     });
 
     if (alreadyUnlocked) {
       return res.json({
-        message: "Already unlocked",
-        lead: cleanLeadForTeacher(lead, true, alreadyUnlocked),
-        coinsSpent: alreadyUnlocked.coinsSpent,
+        message:     "Already unlocked",
+        lead:        cleanLeadForTeacher(lead, true, alreadyUnlocked),
+        coinsSpent:  alreadyUnlocked.coinsSpent,
         coinBalance: teacher.coinBalance,
-        freeViews: teacher.freeViews,
+        freeViews:   teacher.freeViews,
       });
     }
 
@@ -1372,7 +1248,7 @@ app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHE
       return res.status(400).json({ error: "This lead has reached the maximum unlock limit." });
     }
 
-    let coinsSpent = 0;
+    let coinsSpent   = 0;
     const teacherPatch = {};
 
     if (teacher.freeViews > 0) {
@@ -1380,7 +1256,7 @@ app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHE
     } else {
       if (teacher.coinBalance < COINS_TO_UNLOCK) {
         return res.status(400).json({
-          error: `Not enough coins. You need ${COINS_TO_UNLOCK} coins but have ${teacher.coinBalance}.`,
+          error:       `Not enough coins. You need ${COINS_TO_UNLOCK} coins but have ${teacher.coinBalance}.`,
           coinBalance: teacher.coinBalance,
           coinsNeeded: COINS_TO_UNLOCK,
         });
@@ -1390,26 +1266,18 @@ app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHE
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const updatedTeacher = await tx.teacher.update({
-        where: { id: teacher.id },
-        data: teacherPatch,
-      });
-      const application = await tx.leadApplication.create({
-        data: { leadId, teacherId: teacher.id, coinsSpent },
-      });
-      const updatedLead = await tx.lead.update({
-        where: { id: leadId },
-        data: { applyCount: { increment: 1 } },
-      });
+      const updatedTeacher = await tx.teacher.update({ where: { id: teacher.id }, data: teacherPatch });
+      const application    = await tx.leadApplication.create({ data: { leadId, teacherId: teacher.id, coinsSpent } });
+      const updatedLead    = await tx.lead.update({ where: { id: leadId }, data: { applyCount: { increment: 1 } } });
       return { updatedTeacher, application, updatedLead };
     });
 
     res.json({
-      message: coinsSpent ? `Unlocked! ${coinsSpent} coins deducted.` : "Free unlock used.",
-      lead: cleanLeadForTeacher(result.updatedLead, true, result.application),
+      message:     coinsSpent ? `Unlocked! ${coinsSpent} coins deducted.` : "Free unlock used.",
+      lead:        cleanLeadForTeacher(result.updatedLead, true, result.application),
       coinsSpent,
       coinBalance: result.updatedTeacher.coinBalance,
-      freeViews: result.updatedTeacher.freeViews,
+      freeViews:   result.updatedTeacher.freeViews,
     });
   } catch (err) {
     console.error("Unlock lead error:", err.message);
@@ -1417,22 +1285,22 @@ app.post("/teacher/leads/:leadId/unlock", authenticateToken, requireRole("TEACHE
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  TEACHER PROFILE — CREATE / UPDATE (POST)
+// ══════════════════════════════════════════════════════════════════════════════
 app.post("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
     const userEmail = normalizeEmail(req.user.email);
     const { name, qualification, experience, subjects, location, city, pincode, monthlyFee } = req.body;
     const subjectText = serializeSubjects(subjects);
 
-    const existing = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
+    const existing = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
 
     if (existing) {
-      // Update instead of error
       const teacher = await prisma.teacher.update({
         where: { userId: req.user.userId },
         data: {
-          email:         userEmail,
+          email: userEmail,
           ...(name          && { name }),
           ...(qualification && { qualification }),
           ...(experience    && { experience: parseInt(experience) }),
@@ -1440,54 +1308,24 @@ app.post("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (r
           ...(location      && { location }),
           ...(city          && { city }),
           ...(pincode       && { pincode }),
-          ...(monthlyFee    !== undefined && { monthlyFee: parseInt(monthlyFee) || 0 }),
-        }
+          ...(monthlyFee !== undefined && { monthlyFee: parseInt(monthlyFee) || 0 }),
+        },
       });
-      return res.json({
-        message:       "Teacher profile updated ✅",
-        name:          teacher.name,
-        qualification: teacher.qualification,
-        experience:    teacher.experience,
-        subjects:      teacher.subjects,
-        location:      teacher.location,
-        city:          teacher.city,
-        pincode:       teacher.pincode,
-        monthlyFee:    teacher.monthlyFee,
-        coinBalance:   teacher.coinBalance,
-        freeViews:     teacher.freeViews,
-      });
+      return res.json({ message: "Teacher profile updated ✅", ...teacher });
     }
 
     const teacher = await prisma.teacher.create({
       data: {
-        userId:        req.user.userId,
-        email:         userEmail,
-        name:          name || "",
-        qualification: qualification || "",
-        experience:    parseInt(experience) || 0,
-        subjects:      subjectText,
-        location:      location || "",
-        city:          city || "",
-        pincode:       pincode || "",
-        monthlyFee:    parseInt(monthlyFee) || 0,
-        coinBalance:   STARTING_COINS,
-        freeViews:     FREE_VIEWS,
-      }
+        userId: req.user.userId, email: userEmail,
+        name: name || "", qualification: qualification || "",
+        experience: parseInt(experience) || 0, subjects: subjectText,
+        location: location || "", city: city || "", pincode: pincode || "",
+        monthlyFee: parseInt(monthlyFee) || 0,
+        coinBalance: STARTING_COINS, freeViews: FREE_VIEWS,
+      },
     });
 
-    res.status(201).json({
-      message:       "Teacher profile created ✅",
-      name:          teacher.name,
-      qualification: teacher.qualification,
-      experience:    teacher.experience,
-      subjects:      teacher.subjects,
-      location:      teacher.location,
-      city:          teacher.city,
-      pincode:       teacher.pincode,
-      monthlyFee:    teacher.monthlyFee,
-      coinBalance:   teacher.coinBalance,
-      freeViews:     teacher.freeViews,
-    });
+    res.status(201).json({ message: "Teacher profile created ✅", ...teacher });
   } catch (err) {
     console.error("Create teacher profile error:", err.message);
     res.status(500).json({ error: "Failed to create profile: " + err.message });
@@ -1499,26 +1337,9 @@ app.post("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (r
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Profile not found." });
-    }
-
-    res.json({
-      name:          teacher.name,
-      qualification: teacher.qualification,
-      experience:    teacher.experience,
-      subjects:      teacher.subjects,
-      location:      teacher.location,
-      city:          teacher.city,
-      pincode:       teacher.pincode,
-      monthlyFee:    teacher.monthlyFee,
-      coinBalance:   teacher.coinBalance,
-      freeViews:     teacher.freeViews,
-    });
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Profile not found." });
+    res.json(teacher);
   } catch (err) {
     console.error("Get teacher profile error:", err.message);
     res.status(500).json({ error: "Server error" });
@@ -1526,7 +1347,7 @@ app.get("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (re
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  TEACHER PROFILE — UPDATE
+//  TEACHER PROFILE — UPDATE (PUT)
 // ══════════════════════════════════════════════════════════════════════════════
 app.put("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
@@ -1534,16 +1355,14 @@ app.put("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (re
     const { name, qualification, experience, subjects, location, city, pincode, monthlyFee } = req.body;
     const subjectText = serializeSubjects(subjects);
 
-    const existing = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
+    const existing = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
 
     let teacher;
     if (existing) {
       teacher = await prisma.teacher.update({
         where: { userId: req.user.userId },
         data: {
-          email:         userEmail,
+          email: userEmail,
           ...(name          !== undefined && { name }),
           ...(qualification !== undefined && { qualification }),
           ...(experience    !== undefined && { experience: parseInt(experience) || 0 }),
@@ -1552,40 +1371,22 @@ app.put("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (re
           ...(city          !== undefined && { city }),
           ...(pincode       !== undefined && { pincode }),
           ...(monthlyFee    !== undefined && { monthlyFee: parseInt(monthlyFee) || 0 }),
-        }
+        },
       });
     } else {
       teacher = await prisma.teacher.create({
         data: {
-          userId:        req.user.userId,
-          email:         userEmail,
-          name:          name || "",
-          qualification: qualification || "",
-          experience:    parseInt(experience) || 0,
-          subjects:      subjectText,
-          location:      location || "",
-          city:          city || "",
-          pincode:       pincode || "",
-          monthlyFee:    parseInt(monthlyFee) || 0,
-          coinBalance:   STARTING_COINS,
-          freeViews:     FREE_VIEWS,
-        }
+          userId: req.user.userId, email: userEmail,
+          name: name || "", qualification: qualification || "",
+          experience: parseInt(experience) || 0, subjects: subjectText,
+          location: location || "", city: city || "", pincode: pincode || "",
+          monthlyFee: parseInt(monthlyFee) || 0,
+          coinBalance: STARTING_COINS, freeViews: FREE_VIEWS,
+        },
       });
     }
 
-    res.json({
-      message:       "Profile updated ✅",
-      name:          teacher.name,
-      qualification: teacher.qualification,
-      experience:    teacher.experience,
-      subjects:      teacher.subjects,
-      location:      teacher.location,
-      city:          teacher.city,
-      pincode:       teacher.pincode,
-      monthlyFee:    teacher.monthlyFee,
-      coinBalance:   teacher.coinBalance,
-      freeViews:     teacher.freeViews,
-    });
+    res.json({ message: "Profile updated ✅", ...teacher });
   } catch (err) {
     console.error("Update teacher profile error:", err.message);
     res.status(500).json({ error: "Failed to update profile: " + err.message });
@@ -1597,31 +1398,16 @@ app.put("/teacher/profile", authenticateToken, requireRole("TEACHER"), async (re
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/students", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Please create your teacher profile first." });
 
-    if (!teacher) {
-      return res.status(404).json({ error: "Please create your teacher profile first." });
-    }
+    const unlocked    = await prisma.unlock.findMany({ where: { teacherId: teacher.id }, select: { studentId: true } });
+    const unlockedIds = unlocked.map((u) => u.studentId);
 
-    const unlocked = await prisma.unlock.findMany({
-      where:  { teacherId: teacher.id },
-      select: { studentId: true }
-    });
-    const unlockedIds = unlocked.map(u => u.studentId);
-
-    // Only show students with name filled
-    const students = await prisma.student.findMany({
-      where: { name: { not: "" } }
-    });
-
-    const studentsWithStatus = students.map((student) => {
-      return cleanStudent(student, unlockedIds.includes(student.id));
-    });
+    const students = await prisma.student.findMany({ where: { name: { not: "" } } });
 
     res.json({
-      students:    studentsWithStatus,
+      students:    students.map((s) => cleanStudent(s, unlockedIds.includes(s.id))),
       coinBalance: teacher.coinBalance,
       freeViews:   teacher.freeViews,
     });
@@ -1636,19 +1422,9 @@ app.get("/teacher/students", authenticateToken, requireRole("TEACHER"), async (r
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/coins", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
-
-    res.json({
-      coinBalance:   teacher.coinBalance,
-      freeViews:     teacher.freeViews,
-      coinsToUnlock: COINS_TO_UNLOCK,
-    });
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
+    res.json({ coinBalance: teacher.coinBalance, freeViews: teacher.freeViews, coinsToUnlock: COINS_TO_UNLOCK });
   } catch (err) {
     console.error("Get coins error:", err.message);
     res.status(500).json({ error: "Server error" });
@@ -1656,42 +1432,26 @@ app.get("/teacher/coins", authenticateToken, requireRole("TEACHER"), async (req,
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  TEACHER — UNLOCK STUDENT
+//  TEACHER — UNLOCK STUDENT (legacy)
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/teacher/unlock/:studentId", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
     const studentId = parseInt(req.params.studentId);
+    const teacher   = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
 
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
-
-    const student = await prisma.student.findUnique({
-      where: { id: studentId }
-    });
-
-    if (!student) {
-      return res.status(404).json({ error: "Student not found." });
-    }
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) return res.status(404).json({ error: "Student not found." });
 
     const alreadyUnlocked = await prisma.unlock.findUnique({
-      where: {
-        teacherId_studentId: {
-          teacherId: teacher.id,
-          studentId: studentId,
-        }
-      }
+      where: { teacherId_studentId: { teacherId: teacher.id, studentId } },
     });
 
     if (alreadyUnlocked) {
       return res.json({
-        message:    "Already unlocked ✅",
-        student:    cleanStudent(student, true),
-        coinsSpent: 0,
+        message:     "Already unlocked ✅",
+        student:     cleanStudent(student, true),
+        coinsSpent:  0,
         coinBalance: teacher.coinBalance,
         freeViews:   teacher.freeViews,
       });
@@ -1700,11 +1460,7 @@ app.post("/teacher/unlock/:studentId", authenticateToken, requireRole("TEACHER")
     let coinsSpent = 0;
 
     if (teacher.freeViews > 0) {
-      await prisma.teacher.update({
-        where: { id: teacher.id },
-        data:  { freeViews: { decrement: 1 } }
-      });
-      console.log(`✅ Free view used. Remaining: ${teacher.freeViews - 1}`);
+      await prisma.teacher.update({ where: { id: teacher.id }, data: { freeViews: { decrement: 1 } } });
     } else {
       if (teacher.coinBalance < COINS_TO_UNLOCK) {
         return res.status(400).json({
@@ -1713,26 +1469,13 @@ app.post("/teacher/unlock/:studentId", authenticateToken, requireRole("TEACHER")
           coinsNeeded: COINS_TO_UNLOCK,
         });
       }
-
-      await prisma.teacher.update({
-        where: { id: teacher.id },
-        data:  { coinBalance: { decrement: COINS_TO_UNLOCK } }
-      });
-
+      await prisma.teacher.update({ where: { id: teacher.id }, data: { coinBalance: { decrement: COINS_TO_UNLOCK } } });
       coinsSpent = COINS_TO_UNLOCK;
     }
 
-    await prisma.unlock.create({
-      data: {
-        teacherId:  teacher.id,
-        studentId:  studentId,
-        coinsSpent: coinsSpent,
-      }
-    });
+    await prisma.unlock.create({ data: { teacherId: teacher.id, studentId, coinsSpent } });
 
-    const updatedTeacher = await prisma.teacher.findUnique({
-      where: { id: teacher.id }
-    });
+    const updatedTeacher = await prisma.teacher.findUnique({ where: { id: teacher.id } });
 
     res.json({
       message:     "Student unlocked successfully ✅",
@@ -1748,24 +1491,19 @@ app.post("/teacher/unlock/:studentId", authenticateToken, requireRole("TEACHER")
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  TEACHER — GET ALL UNLOCKED STUDENTS
+//  TEACHER — GET ALL UNLOCKED STUDENTS (legacy)
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/teacher/unlocked", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
 
     const unlocks = await prisma.unlock.findMany({
       where:   { teacherId: teacher.id },
       include: { student: true },
     });
 
-    const students = unlocks.map(u => ({
+    const students = unlocks.map((u) => ({
       ...cleanStudent(u.student, true),
       coinsSpent: u.coinsSpent,
       unlockedAt: u.createdAt,
@@ -1783,13 +1521,12 @@ app.get("/teacher/unlocked", authenticateToken, requireRole("TEACHER"), async (r
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/payment/create-order", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const amount = Number(req.body.amount);
+    const amount     = Number(req.body.amount);
+    const coinsToAdd = Math.round(amount * COINS_PER_RUPEE);
 
     if (!amount || amount < 1) {
       return res.status(400).json({ error: "Minimum payment is ₹1" });
     }
-
-    const coinsToAdd = Math.round(amount * COINS_PER_RUPEE);
 
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
       return res.json({
@@ -1802,14 +1539,14 @@ app.post("/payment/create-order", authenticateToken, requireRole("TEACHER"), asy
       });
     }
 
-    const order = await razorpay.orders.create({
+    const order = await getRazorpay().orders.create({
       amount:   amount * 100,
       currency: "INR",
       receipt:  `receipt_${Date.now()}`,
       notes: {
         teacherId: req.user.userId.toString(),
         coins:     coinsToAdd.toString(),
-      }
+      },
     });
 
     console.log(`✅ Razorpay order created: ${order.id}`);
@@ -1832,12 +1569,9 @@ app.post("/payment/create-order", authenticateToken, requireRole("TEACHER"), asy
 // ══════════════════════════════════════════════════════════════════════════════
 app.post("/payment/verify", authenticateToken, requireRole("TEACHER"), async (req, res) => {
   try {
-    const razorpay_order_id =
-      req.body.razorpay_order_id || req.body.razorpayOrderId || req.body.orderId;
-    const razorpay_payment_id =
-      req.body.razorpay_payment_id || req.body.razorpayPaymentId || req.body.paymentId;
-    const razorpay_signature =
-      req.body.razorpay_signature || req.body.razorpaySignature || req.body.signature;
+    const razorpay_order_id   = req.body.razorpay_order_id   || req.body.razorpayOrderId   || req.body.orderId;
+    const razorpay_payment_id = req.body.razorpay_payment_id || req.body.razorpayPaymentId || req.body.paymentId;
+    const razorpay_signature  = req.body.razorpay_signature  || req.body.razorpaySignature  || req.body.signature;
     const amount = Number(req.body.amount);
 
     if (!razorpay_order_id || !razorpay_payment_id) {
@@ -1870,17 +1604,12 @@ app.post("/payment/verify", authenticateToken, requireRole("TEACHER"), async (re
 
     const coinsToAdd = Math.round(amount * COINS_PER_RUPEE);
 
-    const teacher = await prisma.teacher.findUnique({
-      where: { userId: req.user.userId }
-    });
-
-    if (!teacher) {
-      return res.status(404).json({ error: "Teacher profile not found." });
-    }
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.userId } });
+    if (!teacher) return res.status(404).json({ error: "Teacher profile not found." });
 
     const updatedTeacher = await prisma.teacher.update({
       where: { id: teacher.id },
-      data:  { coinBalance: { increment: coinsToAdd } }
+      data:  { coinBalance: { increment: coinsToAdd } },
     });
 
     await prisma.payment.create({
@@ -1890,7 +1619,7 @@ app.post("/payment/verify", authenticateToken, requireRole("TEACHER"), async (re
         coinsAdded: coinsToAdd,
         status:     "SUCCESS",
         razorpayId: razorpay_payment_id,
-      }
+      },
     });
 
     console.log(`✅ Payment verified! ${coinsToAdd} coins added to teacher ${teacher.id}`);
@@ -1907,11 +1636,16 @@ app.post("/payment/verify", authenticateToken, requireRole("TEACHER"), async (re
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  ADMIN ROUTES
+//  ADMIN — STATS
 // ══════════════════════════════════════════════════════════════════════════════
 app.get("/admin/stats", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const [totalUsers, totalStudents, totalTeachers, totalPayments, totalRevenue, totalLeads, pendingLeads, publishedLeads, hiddenLeads, leadUnlocks, profileUnlocks, recentPayments] = await Promise.all([
+    const [
+      totalUsers, totalStudents, totalTeachers,
+      totalPayments, totalRevenue, totalLeads,
+      pendingLeads, publishedLeads, hiddenLeads,
+      leadUnlocks, profileUnlocks, recentPayments,
+    ] = await Promise.all([
       prisma.user.count(),
       prisma.student.count(),
       prisma.teacher.count(),
@@ -1924,32 +1658,36 @@ app.get("/admin/stats", authenticateToken, requireRole("ADMIN"), async (req, res
       prisma.leadApplication.count(),
       prisma.unlock.count(),
       prisma.payment.findMany({
-        where: { status: "SUCCESS" },
+        where:   { status: "SUCCESS" },
         include: { teacher: { include: { user: true } } },
         orderBy: { createdAt: "desc" },
-        take: 5,
-      })
+        take:    5,
+      }),
     ]);
 
     res.json({
-      totalUsers, totalStudents, totalTeachers, totalPayments,
-      totalLeads, pendingLeads, publishedLeads, hiddenLeads,
-      totalUnlocks: leadUnlocks + profileUnlocks,
-      totalRevenue: totalRevenue._sum.amount || 0,
-      recentPayments: recentPayments.map(p => ({
-        id: p.id,
+      totalUsers, totalStudents, totalTeachers,
+      totalPayments, totalLeads, pendingLeads, publishedLeads, hiddenLeads,
+      totalUnlocks:   leadUnlocks + profileUnlocks,
+      totalRevenue:   totalRevenue._sum.amount || 0,
+      recentPayments: recentPayments.map((p) => ({
+        id:          p.id,
         teacherName: p.teacher?.name || p.teacher?.user?.email || "Teacher",
         packageName: p.packageName || "Coins",
-        coinsAdded: p.coinsAdded,
-        amount: p.amount,
-        createdAt: p.createdAt,
+        coinsAdded:  p.coinsAdded,
+        amount:      p.amount,
+        createdAt:   p.createdAt,
       })),
     });
   } catch (err) {
+    console.error("Admin stats error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ADMIN — LEADS
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/admin/leads", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
     const { page = 1, limit = 20, status = "ALL", type = "ALL" } = req.query;
@@ -1964,8 +1702,8 @@ app.get("/admin/leads", authenticateToken, requireRole("ADMIN"), async (req, res
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
         where,
-        skip: (parseInt(page) - 1) * parseInt(limit),
-        take: parseInt(limit),
+        skip:    (parseInt(page) - 1) * parseInt(limit),
+        take:    parseInt(limit),
         orderBy: { createdAt: "desc" },
       }),
       prisma.lead.count({ where }),
@@ -1980,15 +1718,15 @@ app.get("/admin/leads", authenticateToken, requireRole("ADMIN"), async (req, res
 
 app.patch("/admin/leads/:id", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const data = {};
+    const data            = {};
     const requestedStatus = req.body.status;
 
     if (requestedStatus) {
       if (requestedStatus === "PRIVATE") {
         data.isPrivate = true;
-        data.status = "HIDDEN";
+        data.status    = "HIDDEN";
       } else {
-        data.status = requestedStatus;
+        data.status    = requestedStatus;
         data.isPrivate = false;
       }
     }
@@ -2000,7 +1738,7 @@ app.patch("/admin/leads/:id", authenticateToken, requireRole("ADMIN"), async (re
     }
 
     const where = { id: parseInt(req.params.id) };
-    const lead = Object.keys(data).length
+    const lead  = Object.keys(data).length
       ? await prisma.lead.update({ where, data })
       : await prisma.lead.findUnique({ where });
 
@@ -2027,44 +1765,48 @@ app.delete("/admin/leads/:id", authenticateToken, requireRole("ADMIN"), async (r
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ADMIN — MEMBERS
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/admin/members", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const { page = 1, limit = 10, role = 'ALL', search = '', status = 'ALL' } = req.query;
+    const { page = 1, limit = 10, role = "ALL", search = "", status = "ALL" } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const where  = {};
 
-    if (role !== 'ALL') where.role = role;
+    if (role   !== "ALL") where.role = role;
     if (search) {
       where.OR = [
-        { email: { contains: search, mode: 'insensitive' } },
-        { student: { name: { contains: search, mode: 'insensitive' } } },
-        { teacher: { name: { contains: search, mode: 'insensitive' } } }
+        { email:   { contains: search, mode: "insensitive" } },
+        { student: { name: { contains: search, mode: "insensitive" } } },
+        { teacher: { name: { contains: search, mode: "insensitive" } } },
       ];
     }
-    if (status === 'SUSPENDED') where.isSuspended = true;
-    else if (status === 'ACTIVE') where.isSuspended = false;
+    if (status === "SUSPENDED") where.isSuspended = true;
+    else if (status === "ACTIVE") where.isSuspended = false;
 
     const [members, total] = await Promise.all([
       prisma.user.findMany({
         where,
         include: { student: true, teacher: true },
-        skip: offset,
-        take: parseInt(limit),
-        orderBy: { createdAt: 'desc' }
+        skip:    offset,
+        take:    parseInt(limit),
+        orderBy: { createdAt: "desc" },
       }),
-      prisma.user.count({ where })
+      prisma.user.count({ where }),
     ]);
 
     res.json({
-      members: members.map(u => ({
+      members: members.map((u) => ({
         id: u.id, email: u.email, phone: u.phone, role: u.role,
         isVerified: u.isVerified, createdAt: u.createdAt,
-        profile: u.student || u.teacher || null,
+        profile:     u.student || u.teacher || null,
         isSuspended: u.isSuspended || false,
       })),
       total, page: parseInt(page), limit: parseInt(limit),
     });
   } catch (err) {
+    console.error("Admin members error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -2073,10 +1815,11 @@ app.patch("/admin/members/:id/suspend", authenticateToken, requireRole("ADMIN"),
   try {
     const user = await prisma.user.update({
       where: { id: parseInt(req.params.id) },
-      data:  { isSuspended: !!req.body.isSuspended }
+      data:  { isSuspended: !!req.body.isSuspended },
     });
-    res.json({ message: `User ${req.body.isSuspended ? 'suspended' : 'unsuspended'}`, user });
+    res.json({ message: `User ${req.body.isSuspended ? "suspended" : "unsuspended"}`, user });
   } catch (err) {
+    console.error("Suspend member error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -2084,56 +1827,69 @@ app.patch("/admin/members/:id/suspend", authenticateToken, requireRole("ADMIN"),
 app.patch("/admin/members/:id/coins", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
-      where: { id: parseInt(req.params.id) }, include: { teacher: true }
+      where: { id: parseInt(req.params.id) }, include: { teacher: true },
     });
     if (!user?.teacher) return res.status(400).json({ error: "User must be a teacher" });
 
     const teacher = await prisma.teacher.update({
       where: { id: user.teacher.id },
-      data:  { coinBalance: { increment: req.body.delta } }
+      data:  { coinBalance: { increment: req.body.delta } },
     });
-    res.json({ message: `Coins adjusted`, newBalance: teacher.coinBalance });
+    res.json({ message: "Coins adjusted", newBalance: teacher.coinBalance });
   } catch (err) {
+    console.error("Adjust coins error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ADMIN — TRANSACTIONS
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/admin/transactions", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const { page = 1, limit = 10, status = 'ALL' } = req.query;
+    const { page = 1, limit = 10, status = "ALL" } = req.query;
     const where = {};
-    if (status !== 'ALL') where.status = status;
+    if (status !== "ALL") where.status = status;
 
     const [transactions, total] = await Promise.all([
       prisma.payment.findMany({
         where,
         include: { teacher: { include: { user: true } } },
-        skip: (parseInt(page) - 1) * parseInt(limit),
-        take: parseInt(limit),
-        orderBy: { createdAt: 'desc' }
+        skip:    (parseInt(page) - 1) * parseInt(limit),
+        take:    parseInt(limit),
+        orderBy: { createdAt: "desc" },
       }),
-      prisma.payment.count({ where })
+      prisma.payment.count({ where }),
     ]);
 
     res.json({
-      transactions: transactions.map(t => ({
+      transactions: transactions.map((t) => ({
         id: t.id, teacherId: t.teacherId,
-        teacherName: t.teacher.name, teacherEmail: t.teacher.user.email,
-        amount: t.amount, coinsAdded: t.coinsAdded,
-        status: t.status, razorpayId: t.razorpayId, createdAt: t.createdAt,
+        teacherName:  t.teacher.name,
+        teacherEmail: t.teacher.user.email,
+        amount:    t.amount,
+        coinsAdded: t.coinsAdded,
+        status:    t.status,
+        razorpayId: t.razorpayId,
+        createdAt: t.createdAt,
       })),
       total, page: parseInt(page), limit: parseInt(limit),
     });
   } catch (err) {
+    console.error("Admin transactions error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ADMIN — COIN PACKAGES
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/admin/packages", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const packages = await prisma.coinPackage.findMany({ orderBy: { createdAt: 'desc' } });
+    const packages = await prisma.coinPackage.findMany({ orderBy: { createdAt: "desc" } });
     res.json({ packages });
   } catch (err) {
+    console.error("Admin packages error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -2147,6 +1903,7 @@ app.post("/admin/packages", authenticateToken, requireRole("ADMIN"), async (req,
       : await prisma.coinPackage.create({ data });
     res.json({ message: id ? "Package updated" : "Package created", package: pkg });
   } catch (err) {
+    console.error("Save package error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -2156,18 +1913,22 @@ app.delete("/admin/packages/:id", authenticateToken, requireRole("ADMIN"), async
     await prisma.coinPackage.delete({ where: { id: parseInt(req.params.id) } });
     res.json({ message: "Package deleted" });
   } catch (err) {
+    console.error("Delete package error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  PUBLIC — FAQs
+// ══════════════════════════════════════════════════════════════════════════════
 app.get("/faqs", async (req, res) => {
   try {
     await ensureDefaultFaqs();
     const faqs = await prisma.fAQ.findMany({
-      where: { isActive: true },
+      where:   { isActive: true },
       orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     });
-    res.json({ faqs: faqs.map(f => ({ id: f.id, q: f.question, a: f.answer, isActive: f.isActive, order: f.order })) });
+    res.json({ faqs: faqs.map((f) => ({ id: f.id, q: f.question, a: f.answer, isActive: f.isActive, order: f.order })) });
   } catch (err) {
     console.error("Get FAQs error:", err.message);
     res.status(500).json({ error: "Failed to load FAQs" });
@@ -2177,11 +1938,10 @@ app.get("/faqs", async (req, res) => {
 app.get("/admin/faqs", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
     await ensureDefaultFaqs();
-    const faqs = await prisma.fAQ.findMany({
-      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
-    });
-    res.json({ faqs: faqs.map(f => ({ id: f.id, q: f.question, a: f.answer, isActive: f.isActive, order: f.order })) });
+    const faqs = await prisma.fAQ.findMany({ orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
+    res.json({ faqs: faqs.map((f) => ({ id: f.id, q: f.question, a: f.answer, isActive: f.isActive, order: f.order })) });
   } catch (err) {
+    console.error("Admin get FAQs error:", err.message);
     res.status(500).json({ error: "Failed to load FAQs" });
   }
 });
@@ -2189,20 +1949,15 @@ app.get("/admin/faqs", authenticateToken, requireRole("ADMIN"), async (req, res)
 app.post("/admin/faqs", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
     const question = String(req.body.q || req.body.question || "").trim();
-    const answer = String(req.body.a || req.body.answer || "").trim();
-    if (!question || !answer) {
-      return res.status(400).json({ error: "Question and answer are required." });
-    }
+    const answer   = String(req.body.a || req.body.answer   || "").trim();
+    if (!question || !answer) return res.status(400).json({ error: "Question and answer are required." });
+
     const faq = await prisma.fAQ.create({
-      data: {
-        question,
-        answer,
-        isActive: req.body.isActive ?? true,
-        order: parseInt(req.body.order) || 0,
-      },
+      data: { question, answer, isActive: req.body.isActive ?? true, order: parseInt(req.body.order) || 0 },
     });
     res.json({ faq: { id: faq.id, q: faq.question, a: faq.answer, isActive: faq.isActive, order: faq.order } });
   } catch (err) {
+    console.error("Create FAQ error:", err.message);
     res.status(500).json({ error: "Failed to save FAQ" });
   }
 });
@@ -2217,13 +1972,16 @@ app.patch("/admin/faqs/:id", authenticateToken, requireRole("ADMIN"), async (req
       data.answer = String(req.body.a || req.body.answer || "").trim();
     }
     if (Object.prototype.hasOwnProperty.call(req.body, "isActive")) data.isActive = !!req.body.isActive;
-    if (Object.prototype.hasOwnProperty.call(req.body, "order")) data.order = parseInt(req.body.order) || 0;
+    if (Object.prototype.hasOwnProperty.call(req.body, "order"))    data.order    = parseInt(req.body.order) || 0;
+
     if (data.question === "" || data.answer === "") {
       return res.status(400).json({ error: "Question and answer cannot be empty." });
     }
+
     const faq = await prisma.fAQ.update({ where: { id: parseInt(req.params.id) }, data });
     res.json({ faq: { id: faq.id, q: faq.question, a: faq.answer, isActive: faq.isActive, order: faq.order } });
   } catch (err) {
+    console.error("Update FAQ error:", err.message);
     res.status(500).json({ error: "Failed to update FAQ" });
   }
 });
@@ -2233,6 +1991,7 @@ app.delete("/admin/faqs/:id", authenticateToken, requireRole("ADMIN"), async (re
     await prisma.fAQ.delete({ where: { id: parseInt(req.params.id) } });
     res.json({ message: "FAQ deleted" });
   } catch (err) {
+    console.error("Delete FAQ error:", err.message);
     res.status(500).json({ error: "Failed to delete FAQ" });
   }
 });
@@ -2242,27 +2001,32 @@ app.get("/health", (req, res) => {
   res.json({ status: "Server is running ✅", port: process.env.PORT || 5000, redis: redis.status });
 });
 
-// ─── Catch-all ────────────────────────────────────────────────────────────────
+// ─── Catch-all → SPA ──────────────────────────────────────────────────────────
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(frontendPath, "index.html"));
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, "0.0.0.0",() => {
-  console.log(`\n🚀 Server running on http://localhost:${PORT}`);
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`\n🚀 Server running on http://0.0.0.0:${PORT}`);
   console.log(`🖥️  Frontend served from: ${frontendPath}`);
+  console.log(`🔑 Razorpay configured: ${!!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET)}`);
   console.log(`📋 Routes ready:`);
   console.log(`   POST /auth/send-otp`);
   console.log(`   POST /auth/verify-otp`);
   console.log(`   POST /auth/register`);
   console.log(`   POST /auth/login`);
   console.log(`   POST /auth/login/verify`);
+  console.log(`   POST /auth/admin-login`);
   console.log(`   POST /auth/logout`);
   console.log(`   GET  /auth/me`);
   console.log(`   POST /student/profile`);
   console.log(`   GET  /student/profile`);
   console.log(`   PUT  /student/profile`);
+  console.log(`   POST /student/leads`);
+  console.log(`   GET  /student/leads`);
   console.log(`   POST /teacher/profile`);
   console.log(`   GET  /teacher/profile`);
   console.log(`   PUT  /teacher/profile`);
@@ -2270,6 +2034,9 @@ app.listen(PORT, "0.0.0.0",() => {
   console.log(`   GET  /teacher/coins`);
   console.log(`   POST /teacher/unlock/:studentId`);
   console.log(`   GET  /teacher/unlocked`);
+  console.log(`   GET  /teacher/leads`);
+  console.log(`   GET  /teacher/leads/unlocked`);
+  console.log(`   POST /teacher/leads/:leadId/unlock`);
   console.log(`   POST /payment/create-order`);
   console.log(`   POST /payment/verify`);
   console.log(`   GET  /health\n`);
