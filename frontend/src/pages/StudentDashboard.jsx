@@ -22,7 +22,7 @@ export default function StudentDashboard() {
   const [leads, setLeads] = useState([]);
 
   useEffect(() => {
-    leadsApi.mine().then(d => setLeads(d.leads || [])).catch(() => {});
+    leadsApi.getMyLeads().then(d => setLeads(d.leads || [])).catch(() => {});
   }, []);
 
   const name       = user?.student?.name || user?.email?.split('@')[0] || 'Student';

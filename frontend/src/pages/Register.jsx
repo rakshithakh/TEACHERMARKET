@@ -55,9 +55,10 @@ export default function Register() {
     try {
       const data = await authApi.googleAuth(response.credential);
       if (!data.isNewUser) {
-        loginWithData(data.user);
+        if (!data.user?.role) throw new Error('Google login needs OTP for this account. Please use email OTP.');
+        loginWithData(data.user, data.token);
         toast('Signed in with Google ✅', 's');
-        navigate(data.user.role === 'TEACHER' ? '/teacher/dashboard' : '/student/dashboard');
+        navigate(String(data.user.role).toUpperCase() === 'TEACHER' ? '/teacher/dashboard' : '/student/dashboard');
         return;
       }
       const profile = data.googleProfile;
@@ -83,6 +84,7 @@ export default function Register() {
   }, [authStep]);
 
   const sendOtp = async () => {
+    if (loading) return;
     if (!authValue.trim()) { toast('Enter your email', 'e'); return; }
     setLoading(true);
     try {
@@ -98,6 +100,7 @@ export default function Register() {
   };
 
   const verifyOtp = async () => {
+    if (loading) return;
     if (otp.length < 6) { toast('Enter the 6-digit OTP', 'e'); return; }
     setLoading(true);
     try {
@@ -134,7 +137,8 @@ export default function Register() {
         } : null,
       };
       const data = await authApi.register(body);
-      loginWithData(data.user);
+      if (!data.user?.role) throw new Error('Account created but login data was missing. Please log in.');
+      loginWithData(data.user, data.token);
       toast('Account created! Welcome 🎉', 's');
       navigate(role === 'TEACHER' ? '/teacher/dashboard' : '/student/dashboard');
     } catch (err) { toast(err.message, 'e'); }

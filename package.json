@@ -8,7 +8,7 @@
     "client:dev": "npm --prefix frontend run dev",
     "client:build": "npm --prefix frontend run build",
     "build": "prisma generate && npm run client:build",
-    "render-build": "prisma migrate deploy && prisma generate",
+    "render-build": "prisma generate",
     "postinstall": "prisma generate"
   },
   "dependencies": {

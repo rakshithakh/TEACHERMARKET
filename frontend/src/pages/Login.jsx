@@ -28,7 +28,8 @@ export default function Login() {
         navigate('/register');
         return;
       }
-      loginWithData(data.user);
+      if (!data.user?.role) throw new Error('Google login needs OTP for this account. Please use email OTP.');
+      loginWithData(data.user, data.token);
       toast('Signed in with Google ✅', 's');
       redirect(data.user.role);
     } catch (err) { toast(err.message, 'e'); }
@@ -43,21 +44,25 @@ export default function Login() {
   }, [step]);
 
   const redirect = (role) => {
-    if (role === 'ADMIN')        navigate('/admin/dashboard');
-    else if (role === 'TEACHER') navigate('/teacher/dashboard');
-    else                          navigate('/student/dashboard');
+    const normalizedRole = String(role || '').toUpperCase();
+    if (normalizedRole === 'ADMIN')        navigate('/admin/dashboard');
+    else if (normalizedRole === 'TEACHER') navigate('/teacher/dashboard');
+    else if (normalizedRole === 'STUDENT') navigate('/student/dashboard');
+    else navigate('/login');
   };
 
   const sendOtp = async () => {
+    if (loading) return;
     if (!email.trim()) { toast('Enter your email address', 'e'); return; }
     setLoading(true);
     try {
       if (isAdmin) {
         if (!password) { toast('Enter admin password', 'e'); return; }
         const data = await authApi.adminLogin({ email: email.trim(), password });
-        loginWithData(data.user);
+        if (!data.user?.role) throw new Error('Admin login failed. Please try again.');
+        loginWithData(data.user, data.token);
         toast('Admin signed in', 's');
-        navigate('/admin/dashboard');
+        redirect(data.user.role);
         return;
       }
       const data = await authApi.sendLoginOtp(email.trim());
@@ -75,11 +80,13 @@ export default function Login() {
   };
 
   const verifyOtp = async () => {
+    if (loading) return;
     if (otp.length < 6) { toast('Enter the 6-digit OTP', 'e'); return; }
     setLoading(true);
     try {
       const data = await authApi.verifyLoginOtp(email.trim(), otp);
-      loginWithData(data.user);
+      if (!data.user?.role) throw new Error('Login succeeded but account data was missing. Please login again.');
+      loginWithData(data.user, data.token);
       toast('Welcome back! ✅', 's');
       redirect(data.user.role);
     } catch (err) { toast(err.message, 'e'); }

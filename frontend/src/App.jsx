@@ -3,6 +3,7 @@ import { AppProvider }     from './context/AppContext';
 import Navbar              from './components/Navbar';
 import Toast               from './components/Toast';
 import ProtectedRoute      from './components/ProtectedRoute';
+import ErrorBoundary       from './components/ErrorBoundary';
 
 import Landing             from './pages/Landing';
 import Login               from './pages/Login';
@@ -32,11 +33,12 @@ import './styles/global.css';
 
 export default function App() {
   return (
-    <AppProvider>
-      <BrowserRouter>
-        <Navbar />
-        <Toast  />
-        <Routes>
+    <ErrorBoundary>
+      <AppProvider>
+        <BrowserRouter>
+          <Navbar />
+          <Toast  />
+          <Routes>
           {/* Public */}
           <Route path="/"         element={<Landing  />} />
           <Route path="/login"    element={<Login    />} />
@@ -66,8 +68,9 @@ export default function App() {
           <Route path="/admin/*" element={<ProtectedRoute role="ADMIN"><AdminDashboard /></ProtectedRoute>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AppProvider>
+          </Routes>
+        </BrowserRouter>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

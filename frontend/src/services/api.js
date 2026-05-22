@@ -49,6 +49,24 @@ function decodeGoogleCredential(credential) {
   );
 }
 
+function normalizeUser(input) {
+  const user = input?.user || input;
+  if (!user) return null;
+
+  const role = String(user.role || '').toUpperCase();
+  const profile = user.profile || (role === 'TEACHER' ? user.teacher : user.student) || null;
+
+  return {
+    ...user,
+    role,
+    email: user.email || '',
+    phone: user.phone || '',
+    teacher: user.teacher || (role === 'TEACHER' ? profile : null),
+    student: user.student || (role === 'STUDENT' ? profile : null),
+    profile,
+  };
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  AUTH API
 // ══════════════════════════════════════════════════════════════════════════════
@@ -76,7 +94,7 @@ export const authApi = {
       password,
     });
     if (data.token) token.save(data.token);
-    return data;
+    return { ...data, user: normalizeUser(data.user) };
   },
 
   // Register new user
@@ -126,7 +144,7 @@ export const authApi = {
       }
     }
 
-    return data;
+    return { ...data, user: normalizeUser(data.user) };
   },
 
   // Google Auth
@@ -172,13 +190,13 @@ export const authApi = {
   async verifyLoginOtp(email, otp) {
     const data = await http('POST', '/auth/login/verify', { email, otp });
     if (data.token) token.save(data.token);
-    return data;
+    return { ...data, user: normalizeUser(data.user) };
   },
 
   // Get current logged-in user
   async me() {
     const data = await http('GET', '/auth/me', null, true);
-    return { user: data };
+    return { user: normalizeUser(data) };
   },
 
   // Logout
@@ -284,13 +302,21 @@ export const leadsApi = {
 
   // Student — submit a new lead/requirement
   async submit(body) {
-    return http('POST', '/student/leads', body);
+    return http('POST', '/student/leads', body, true);
+  },
+
+  async post(body) {
+    return this.submit(body);
   },
 
   // Student — get own leads
   async getMyLeads(email = '') {
     const query = email ? `?email=${encodeURIComponent(email)}` : '';
     return http('GET', `/student/leads${query}`, null, true);
+  },
+
+  async mine(email = '') {
+    return this.getMyLeads(email);
   },
 
   // Teacher — browse published leads
@@ -320,7 +346,14 @@ export const leadsApi = {
 
   // Teacher — get all unlocked leads
   async getUnlocked() {
-    return http('GET', '/teacher/leads/unlocked', null, true);
+    const data = await http('GET', '/teacher/leads/unlocked', null, true);
+    const leads = data.leads || data.students || [];
+    return {
+      ...data,
+      leads,
+      students: data.students || leads,
+      total: data.total ?? leads.length,
+    };
   },
 };
 
@@ -371,15 +404,18 @@ export const studentsApi = {
 export const teacherApi = {
 
   async getStats() {
-    const [coinsData, unlockedData] = await Promise.all([
-      http('GET', '/teacher/coins',    null, true),
-      http('GET', '/teacher/unlocked', null, true),
+    const [coinsData, unlockedData, publishedData] = await Promise.all([
+      http('GET', '/teacher/coins', null, true),
+      leadsApi.getUnlocked(),
+      leadsApi.browse().catch(() => ({ total: 0 })),
     ]);
     return {
       coinBalance:      coinsData.coinBalance,
       freeViews:        coinsData.freeViews,
       coinsToUnlock:    coinsData.coinsToUnlock,
       unlockedStudents: unlockedData.total || 0,
+      unlockedLeads:    unlockedData.total || 0,
+      totalPublished:   publishedData.total || 0,
       sentRequests:     0,
       acceptedRequests: 0,
       studentsInCity:   0,

@@ -17,10 +17,12 @@ export default function ProtectedRoute({ children, role }) {
 
   if (!user) return <Navigate to="/login" replace />;
 
-  if (role && user.role !== role.toUpperCase()) {
-    if (user.role === 'ADMIN')   return <Navigate to="/admin/dashboard" replace />;
-    if (user.role === 'TEACHER') return <Navigate to="/teacher/dashboard" replace />;
-    if (user.role === 'STUDENT') return <Navigate to="/student/dashboard" replace />;
+  const userRole = String(user.role || '').toUpperCase();
+
+  if (role && userRole !== role.toUpperCase()) {
+    if (userRole === 'ADMIN')   return <Navigate to="/admin/dashboard" replace />;
+    if (userRole === 'TEACHER') return <Navigate to="/teacher/dashboard" replace />;
+    if (userRole === 'STUDENT') return <Navigate to="/student/dashboard" replace />;
     return <Navigate to="/" replace />;
   }
 

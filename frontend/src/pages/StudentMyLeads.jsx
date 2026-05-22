@@ -32,8 +32,8 @@ export default function StudentMyLeads() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    leadsApi.mine().then(d => setLeads(d.leads || [])).catch(e => toast(e.message, 'e')).finally(() => setLoading(false));
-  }, []);
+    leadsApi.getMyLeads().then(d => setLeads(d.leads || [])).catch(e => toast(e.message, 'e')).finally(() => setLoading(false));
+  }, [toast]);
 
   return (
     <div className="dash-layout">

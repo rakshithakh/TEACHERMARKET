@@ -175,6 +175,7 @@ const generateOTP = () =>
 
 const OTP_TTL                = parseInt(process.env.OTP_TTL)              || 300;
 const MAX_ATTEMPTS           = parseInt(process.env.OTP_MAX_ATTEMPTS)     || 3;
+const OTP_RATE_WINDOW_SECONDS = parseInt(process.env.OTP_RATE_WINDOW_SECONDS) || 3600;
 const EMAIL_VERIFICATION_TTL = parseInt(process.env.EMAIL_VERIFICATION_TTL) || 24 * 60 * 60;
 
 // ─── Parse subjects helper ────────────────────────────────────────────────────
@@ -409,9 +410,10 @@ app.post("/auth/send-otp", async (req, res) => {
 
     const limitKey = `otp_limit:${email}`;
     const count    = await redis.incr(limitKey);
-    if (count === 1) await redis.expire(limitKey, 3600);
+    if (count === 1) await redis.expire(limitKey, OTP_RATE_WINDOW_SECONDS);
     if (count > MAX_ATTEMPTS) {
-      return res.status(429).json({ error: "Too many OTP requests. Try after 1 hour." });
+      res.set("Retry-After", String(OTP_RATE_WINDOW_SECONDS));
+      return res.status(429).json({ error: `Too many OTP requests. Try after ${Math.ceil(OTP_RATE_WINDOW_SECONDS / 60)} minutes.` });
     }
 
     const otp       = generateOTP();
@@ -661,9 +663,10 @@ app.post("/auth/login", async (req, res) => {
 
     const limitKey = `otp_limit:${email}`;
     const count    = await redis.incr(limitKey);
-    if (count === 1) await redis.expire(limitKey, 3600);
+    if (count === 1) await redis.expire(limitKey, OTP_RATE_WINDOW_SECONDS);
     if (count > MAX_ATTEMPTS) {
-      return res.status(429).json({ error: "Too many OTP requests. Try after 1 hour." });
+      res.set("Retry-After", String(OTP_RATE_WINDOW_SECONDS));
+      return res.status(429).json({ error: `Too many OTP requests. Try after ${Math.ceil(OTP_RATE_WINDOW_SECONDS / 60)} minutes.` });
     }
 
     const otp       = generateOTP();

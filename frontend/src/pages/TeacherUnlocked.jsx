@@ -30,6 +30,7 @@ export default function TeacherUnlocked() {
 
   useEffect(() => {
     leadsApi.getUnlocked().then(d => setLeads(d.leads || [])).catch(e => toast(e.message,'e')).finally(() => setLoading(false));
+  }, [toast]);
 
   const copy = async (text, label) => {
     try { await navigator.clipboard.writeText(text); toast(`${label} copied ✅`,'s'); }

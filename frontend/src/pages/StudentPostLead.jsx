@@ -59,7 +59,7 @@ export default function StudentPostLead() {
     setSaving(true);
     try {
       const payload = { ...form, fileAttachment: file?.data || null, fileName: file?.name || null, fileType: file?.type || null };
-      await leadsApi.post(payload);
+      await leadsApi.submit(payload);
       toast('Requirement posted! Admin will review and publish it. ✅', 's');
       navigate('/student/leads');
     } catch(err) { toast(err.message, 'e'); }

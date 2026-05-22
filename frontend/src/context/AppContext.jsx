@@ -35,8 +35,15 @@ export function AppProvider({ children }) {
 
   const loginWithData = useCallback((userData, maybeToken) => {
     if (maybeToken) tokenStore.save(maybeToken);
-    setUser(userData);
-    setCoins(userData?.teacher?.coinBalance || 0);
+    if (!userData?.role) {
+      tokenStore.remove();
+      setUser(null);
+      setCoins(0);
+      return;
+    }
+    const normalized = { ...userData, role: String(userData.role).toUpperCase() };
+    setUser(normalized);
+    setCoins(normalized.teacher?.coinBalance || 0);
   }, []);
 
   const logout = useCallback(() => {
