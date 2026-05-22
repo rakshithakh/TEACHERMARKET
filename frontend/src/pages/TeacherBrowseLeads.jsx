@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { leadsApi } from '../services/api';
+import { downloadAttachment } from '../services/files';
 import Sidebar from '../components/Sidebar';
 
 const NAV = [
@@ -126,6 +127,7 @@ function LeadCard({ lead, onUnlock, unlocking, coins, freeViews }) {
   const isUnlocked   = lead.isUnlocked || !!lead.studentMobile;
   const canUnlock    = freeViews > 0 || coins >= 50;
   const emoji        = TYPE_EMOJI[lead.requirementType] || '🔖';
+  const downloadFile = () => downloadAttachment(lead.fileAttachment, lead.fileName, lead.fileType);
 
   return (
     <div style={{ background:'#fff', border: isUnlocked?'1.5px solid #86efac':'1px solid var(--border)', borderRadius:12, padding:20 }}>
@@ -170,9 +172,9 @@ function LeadCard({ lead, onUnlock, unlocking, coins, freeViews }) {
             {lead.studentEmail && <div style={{ fontSize:13 }}><span style={{ color:'var(--gray)', fontSize:11 }}>Email</span><br/><strong>{lead.studentEmail}</strong></div>}
           </div>
           {lead.fileAttachment && (
-            <a href={lead.fileAttachment} download={lead.fileName} style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:10, fontSize:12, fontWeight:700, color:'var(--blue)', background:'var(--blue-ll)', padding:'5px 12px', borderRadius:7, textDecoration:'none' }}>
+            <button type="button" onClick={downloadFile} style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:10, fontSize:12, fontWeight:700, color:'var(--blue)', background:'var(--blue-ll)', padding:'5px 12px', borderRadius:7, border:'1px solid #bfdbfe', cursor:'pointer' }}>
               📎 Download {lead.fileName}
-            </a>
+            </button>
           )}
         </div>
       ) : (

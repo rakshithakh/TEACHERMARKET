@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import Sidebar from '../components/Sidebar';
 import { leadsApi } from '../services/api';
+import { downloadAttachment, openAttachment } from '../services/files';
 
 const NAV = [
   { type:'section', label:'MAIN' },
@@ -35,6 +36,16 @@ export default function TeacherUnlocked() {
   const copy = async (text, label) => {
     try { await navigator.clipboard.writeText(text); toast(`${label} copied ✅`,'s'); }
     catch { toast(text,'i'); }
+  };
+
+  const openFile = (lead) => {
+    try { openAttachment(lead.fileAttachment, lead.fileName, lead.fileType); }
+    catch (err) { toast(err.message, 'e'); }
+  };
+
+  const downloadFile = (lead) => {
+    try { downloadAttachment(lead.fileAttachment, lead.fileName, lead.fileType); }
+    catch (err) { toast(err.message, 'e'); }
   };
 
   const filtered = leads.filter(l => !search ||
@@ -119,9 +130,14 @@ export default function TeacherUnlocked() {
                   </div>
 
                   {lead.fileAttachment && (
-                    <a href={lead.fileAttachment} download={lead.fileName} style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:10, fontSize:12, fontWeight:700, color:'var(--blue)', background:'var(--blue-ll)', padding:'6px 14px', borderRadius:8, textDecoration:'none' }}>
-                      📎 Download {lead.fileName}
-                    </a>
+                    <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
+                      <button type="button" onClick={() => openFile(lead)} style={{ fontSize:12, fontWeight:700, color:'var(--blue)', background:'var(--blue-ll)', padding:'6px 14px', borderRadius:8, border:'1px solid #bfdbfe', cursor:'pointer' }}>
+                        Open {lead.fileName}
+                      </button>
+                      <button type="button" onClick={() => downloadFile(lead)} style={{ fontSize:12, fontWeight:700, color:'var(--gray)', background:'#fff', padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', cursor:'pointer' }}>
+                        Download
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}

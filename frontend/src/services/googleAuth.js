@@ -1,4 +1,6 @@
 export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+let initializedClientId = '';
+let currentCredentialCallback = null;
 
 export function loadGoogleIdentity() {
   return new Promise((resolve, reject) => {
@@ -35,16 +37,20 @@ export async function renderGoogleButton(container, callback) {
     400,
     Math.max(300, Math.floor(container.getBoundingClientRect().width || container.offsetWidth || 400)),
   );
-  google.accounts.id.initialize({
-    client_id: GOOGLE_CLIENT_ID,
-    callback,
-    ux_mode: 'popup',
-    auto_select: false,
-    cancel_on_tap_outside: true,
-    use_fedcm_for_prompt: false,
-    use_fedcm_for_button: true,
-    button_auto_select: false,
-  });
+  currentCredentialCallback = callback;
+  if (initializedClientId !== GOOGLE_CLIENT_ID) {
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (response) => currentCredentialCallback?.(response),
+      ux_mode: 'popup',
+      auto_select: false,
+      cancel_on_tap_outside: true,
+      use_fedcm_for_prompt: false,
+      use_fedcm_for_button: true,
+      button_auto_select: false,
+    });
+    initializedClientId = GOOGLE_CLIENT_ID;
+  }
   google.accounts.id.renderButton(container, {
     type: 'standard',
     theme: 'outline',

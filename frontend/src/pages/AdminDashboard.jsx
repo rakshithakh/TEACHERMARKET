@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { adminApi } from '../services/api';
+import { downloadAttachment, getAttachmentDataUrl, openAttachment as openFileAttachment } from '../services/files';
 import './AdminDashboard.css';
 
 const TABS = ['Overview','Leads','Users','Transactions','FAQ'];
@@ -176,11 +177,13 @@ function LeadsTab({ toast }) {
   };
 
   const openAttachment = (lead) => {
-    if (!lead.fileAttachment) { toast('No attachment found.','e'); return; }
-    const opened = window.open('','_blank');
-    if (!opened) { toast('Popup blocked. Allow popups and try again.','e'); return; }
-    opened.opener = null;
-    opened.location.href = lead.fileAttachment;
+    try { openFileAttachment(lead.fileAttachment, lead.fileName, lead.fileType); }
+    catch (err) { toast(err.message,'e'); }
+  };
+
+  const downloadFile = (lead) => {
+    try { downloadAttachment(lead.fileAttachment, lead.fileName, lead.fileType); }
+    catch (err) { toast(err.message,'e'); }
   };
 
   const REQ_TYPES = ['ALL','Online Coaching','Spoken English','School Tuition','College Subjects','Software Learning','Assignment / Project Work','Other'];
@@ -268,16 +271,16 @@ function LeadsTab({ toast }) {
                           <button type="button" onClick={() => openAttachment(lead)} style={{ fontSize:12, fontWeight:700, color:'#1e40af', background:'#fff', padding:'6px 12px', borderRadius:7, border:'1px solid #bfdbfe', cursor:'pointer' }}>
                             Open in New Tab
                           </button>
-                          <a href={lead.fileAttachment} download={lead.fileName} style={{ fontSize:12, fontWeight:700, color:'var(--gray)', background:'#fff', padding:'6px 12px', borderRadius:7, border:'1px solid var(--border)', textDecoration:'none' }}>
+                          <button type="button" onClick={() => downloadFile(lead)} style={{ fontSize:12, fontWeight:700, color:'var(--gray)', background:'#fff', padding:'6px 12px', borderRadius:7, border:'1px solid var(--border)', cursor:'pointer' }}>
                             Download
-                          </a>
+                          </button>
                         </div>
                         {previewId===lead.id && canPreviewFile(lead) && (
                           <div style={{ marginTop:10, border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
                             {String(lead.fileType||'').startsWith('image/') || /^data:image\//i.test(String(lead.fileAttachment||'')) ? (
-                              <img src={lead.fileAttachment} alt={lead.fileName} style={{ display:'block', width:'100%', maxHeight:520, objectFit:'contain', background:'#f8fafc' }} />
+                              <img src={getAttachmentDataUrl(lead.fileAttachment, lead.fileName, lead.fileType)} alt={lead.fileName} style={{ display:'block', width:'100%', maxHeight:520, objectFit:'contain', background:'#f8fafc' }} />
                             ) : (
-                              <iframe title={lead.fileName} src={lead.fileAttachment} style={{ display:'block', width:'100%', height:520, border:0 }} />
+                              <iframe title={lead.fileName} src={getAttachmentDataUrl(lead.fileAttachment, lead.fileName, lead.fileType)} style={{ display:'block', width:'100%', height:520, border:0 }} />
                             )}
                           </div>
                         )}
