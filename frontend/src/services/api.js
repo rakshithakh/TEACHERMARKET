@@ -27,9 +27,9 @@ const http = async (method, path, body = null, auth = false) => {
   if (body) options.body = JSON.stringify(body);
 
   const res  = await fetch(`${BASE_URL}${path}`, options);
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
 
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  if (!res.ok) throw new Error(data.error || data.message || 'Something went wrong');
   return data;
 };
 
@@ -300,7 +300,17 @@ export const leadsApi = {
     if (params.subject && params.subject !== '')    query.set('subject', params.subject);
     if (params.city    && params.city    !== '')    query.set('city',    params.city);
     const qs = query.toString();
-    return http('GET', `/teacher/leads${qs ? `?${qs}` : ''}`, null, true);
+    const data = await http('GET', `/teacher/leads${qs ? `?${qs}` : ''}`, null, true);
+    const leads = data.leads || data.students || [];
+    return {
+      ...data,
+      leads,
+      total: data.total ?? leads.length,
+    };
+  },
+
+  async published(params = {}) {
+    return this.browse(params);
   },
 
   // Teacher — unlock a lead
